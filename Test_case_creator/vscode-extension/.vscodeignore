@@ -1,0 +1,12 @@
+.vscode/
+specs/
+tests/
+engine/
+requirements.txt
+requirements-dev.txt
+install.sh
+install.ps1
+package_agent.sh
+tsconfig.json
+webpack.config.js
+node_modules/src/

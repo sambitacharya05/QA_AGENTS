@@ -1,0 +1,25 @@
+mcp>=1.0.0
+python-docx>=1.1.0
+openpyxl>=3.1.2
+pypdf>=4.2.0
+pydantic>=2.7.0
+pyyaml>=6.0.1
+networkx
+rank_bm25
+
+# AST-based parsing (Spec 004 / Wave 2b)
+# tree-sitter core — pre-built wheels available for Python 3.8+
+tree-sitter>=0.21.0
+# Per-language grammar wheels (tree-sitter-languages does not support Python 3.12+;
+# individual wheels work on all supported Python versions).
+tree-sitter-java>=0.23.0
+tree-sitter-typescript>=0.23.0
+tree-sitter-python>=0.23.0
+tree-sitter-go>=0.23.0
+
+# Official Gherkin parser (same engine used by Cucumber reference implementations)
+gherkin-official>=29.0.0
+
+# OpenAPI $ref resolution — resolves local & internal refs only (offline-safe)
+prance>=23.6.21.0
+openapi-spec-validator>=0.7.1

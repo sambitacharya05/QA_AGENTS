@@ -1,0 +1,40 @@
+# ─── Python ───────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+.pytest_cache/
+tmp_test_dir/
+out_tests/
+
+# ─── Node / TypeScript ────────────────────────────────────
+node_modules/
+vscode-extension/out/
+out/
+*.vsix
+*.js.map
+
+# ─── macOS ────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# ─── Runtime / data directories ──────────────────────────
+ingest/
+.context_builder/
+.test_artifacts/
+review documents/
+.scratch/
+specs/
+.claude/
+
+# ─── Context Builder runtime lock files ──────────────────
+*.lock
+
+# ─── VS Code local config ─────────────────────────────────
+.vscode/
+
+# Release packages
+*.zip
+*.tar.gz
+*.tgz

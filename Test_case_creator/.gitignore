@@ -1,0 +1,8 @@
+node_modules/
+vscode-extension/out/
+*.vsix
+.venv/
+__pycache__/
+.pytest_cache/
+.DS_Store
+.test_artifacts/

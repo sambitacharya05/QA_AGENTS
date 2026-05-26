@@ -1,0 +1,132 @@
+{
+  "name": "test-case-creator",
+  "displayName": "Test Case Creator Agent",
+  "description": "Dual-agent QA test designer and generator for Azure DevOps and VS Code.",
+  "version": "1.0.0",
+  "publisher": "sambit-acharya",
+  "engines": {
+    "vscode": "^1.93.0"
+  },
+  "categories": [
+    "AI",
+    "Testing"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "testCaseCreator.generate",
+        "title": "Test Case Creator: Generate"
+      },
+      {
+        "command": "testCaseCreator.status",
+        "title": "Test Case Creator: Status"
+      },
+      {
+        "command": "testCaseCreator.autoFixGaps",
+        "title": "Test Case Creator: Auto-fix Gaps"
+      },
+      {
+        "command": "testCaseCreator.exportBestEffort",
+        "title": "Test Case Creator: Export Best-Effort"
+      },
+      {
+        "command": "test_case_creator.generateAll",
+        "title": "Confirm & Generate All Test Cases"
+      },
+      {
+        "command": "test_case_creator.customize",
+        "title": "Customize Test Category Selection"
+      },
+      {
+        "command": "test_case_creator.autoFixGaps",
+        "title": "Auto-fix Detected Gaps"
+      },
+      {
+        "command": "test_case_creator.exportAnyway",
+        "title": "Export Best-Effort Test Cases"
+      },
+      {
+        "command": "testCaseCreator.validateGraph",
+        "title": "Test Case Creator: Validate Graph"
+      }
+    ],
+    "configuration": {
+      "title": "Test Case Creator Settings",
+      "properties": {
+        "testCaseCreator.areaPath": {
+          "type": "string",
+          "default": "TechInsurance\\Claims",
+          "description": "Target Azure DevOps Area Path for exported test cases."
+        },
+        "testCaseCreator.maxCorrectionIterations": {
+          "type": "integer",
+          "default": 3,
+          "minimum": 1,
+          "maximum": 5,
+          "description": "Maximum number of self-correction feedback cycles."
+        },
+        "testCaseCreator.mcpTimeoutSeconds": {
+          "type": "integer",
+          "default": 30,
+          "minimum": 10,
+          "maximum": 300,
+          "description": "Timeout (seconds) for each MCP tool call. Increase for large graphs or slow environments. Changes take effect on the next tool call without reloading the extension."
+        },
+        "testCaseCreator.validateGraphOnGenerate": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run structural graph validation before starting the generation pipeline. Disable to skip the extra MCP round-trip when graph integrity is already known."
+        },
+        "testCaseCreator.engineDirectory": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to the Test_case_creator installation directory (the folder containing the engine/ module and .venv/). When set, the extension runs the Python MCP engine from this directory instead of the VS Code workspace root. A Python virtual environment at <engineDirectory>/.venv/ is used automatically if present. Changing this setting takes effect when the MCP server next starts (after a crash or VS Code window reload)."
+        }
+      }
+    },
+    "chatParticipants": [
+      {
+        "id": "create_tests",
+        "name": "create_tests",
+        "fullName": "Test Case Creator",
+        "description": "Generates structured Azure DevOps test cases and coverage reports.",
+        "commands": [
+          {
+            "name": "generate",
+            "description": "Analyze rule graph files and generate test case exports."
+          },
+          {
+            "name": "status",
+            "description": "View current pipeline execution and tool status."
+          }
+        ]
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "webpack --mode production",
+    "watch": "webpack --watch --mode development",
+    "pretest": "npm run compile",
+    "test": "node ./out/tests/runTest.js"
+  },
+  "dependencies": {
+    "jsonrepair": "^3.14.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.6",
+    "@types/node": "18.x",
+    "@types/vscode": "^1.93.0",
+    "@typescript-eslint/eslint-plugin": "^6.14.0",
+    "@typescript-eslint/parser": "^6.14.0",
+    "copy-webpack-plugin": "^11.0.0",
+    "mocha": "^10.3.0",
+    "ts-loader": "^9.5.1",
+    "typescript": "^5.3.3",
+    "webpack": "^5.90.3",
+    "webpack-cli": "^5.1.4"
+  }
+}

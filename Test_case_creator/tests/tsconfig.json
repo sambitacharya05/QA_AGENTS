@@ -1,0 +1,25 @@
+{
+  "extends": "../vscode-extension/tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "..",
+    "outDir": "../out_tests",
+    "baseUrl": "..",
+    "types": [
+      "node",
+      "mocha"
+    ],
+    "typeRoots": [
+      "../vscode-extension/node_modules/@types"
+    ],
+    "paths": {
+      "*": [
+        "*",
+        "vscode-extension/node_modules/*"
+      ]
+    }
+  },
+  "include": [
+    "extension/**/*",
+    "../vscode-extension/src/**/*"
+  ]
+}

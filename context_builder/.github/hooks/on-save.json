@@ -1,0 +1,16 @@
+{
+  "hookName": "Workspace Ingest Syncer",
+  "trigger": "onDidSaveTextDocument",
+  "filters": {
+    "files": "**/ingest/**/*.*",
+    "exclude": "**/node_modules/**"
+  },
+  "action": {
+    "type": "vscode_command",
+    "command": "build_context.runIngestAgent"
+  },
+  "notification": {
+    "onSuccess": "Silent sync completed. Context graph refreshed.",
+    "onFailure": "Context graph background synchronization failed. Run @build_context /status to review."
+  }
+}

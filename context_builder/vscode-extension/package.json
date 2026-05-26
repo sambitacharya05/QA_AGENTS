@@ -1,0 +1,80 @@
+{
+  "name": "context-builder-agent",
+  "displayName": "Context Builder Copilot Agent",
+  "description": "Programmatic Copilot Chat Participant @build_context to scan, parse, and build semantic context graphs.",
+  "version": "1.1.0",
+  "publisher": "sambit-acharya",
+  "engines": {
+    "vscode": "^1.93.0"
+  },
+  "categories": [
+    "AI",
+    "Programming Languages"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "build_context.runIngestAgent",
+        "title": "Run Context Builder Agent"
+      }
+    ],
+    "configuration": {
+      "title": "Context Builder Settings",
+      "properties": {
+        "contextBuilder.serverDirectory": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to the context_builder server directory (the folder containing main.py, engine/, db/, and parsers/). When set, the extension runs the MCP server from this directory instead of searching the workspace root. A Python virtual environment at <serverDirectory>/.venv/ is used automatically if present. Changing this setting takes effect when the MCP server process next starts (after a crash or VS Code window reload)."
+        }
+      }
+    },
+    "chatParticipants": [
+      {
+        "id": "build_context",
+        "name": "build_context",
+        "fullName": "Context Builder",
+        "description": "Scans documents in ./ingest and creates/traces a Semantic Context Graph.",
+        "commands": [
+          {
+            "name": "ingest",
+            "description": "Parses requirement files inside ./ingest and runs multi-agent graph mapping."
+          },
+          {
+            "name": "query",
+            "description": "Queries the local Semantic Context Graph."
+          },
+          {
+            "name": "trace",
+            "description": "Displays the multi-hop traceability tree for a business rule."
+          },
+          {
+            "name": "status",
+            "description": "Compares disk files inside ./ingest against active graph store checksums."
+          },
+          {
+            "name": "view",
+            "description": "Launches an interactive network diagram of the Context Graph inside a VS Code Webview."
+          }
+        ]
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src --ext ts",
+    "package": "vsce package"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "18.x",
+    "@types/vscode": "^1.93.0",
+    "@typescript-eslint/eslint-plugin": "^6.14.0",
+    "@typescript-eslint/parser": "^6.14.0",
+    "typescript": "^5.3.3"
+  }
+}
