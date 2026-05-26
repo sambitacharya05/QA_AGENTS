@@ -741,17 +741,34 @@ Your task is to write automated functional integration tests for the following A
 
 # ── Spec 005: Copilot-native edge augmentation ────────────────────────────────
 
+def _fetch_edge_candidates(workspace_path: str = None, limit: int = 100) -> list:
+    """Internal helper: return the raw sub-threshold candidate list from the last ingest.
+
+    Shared by both the MCP prompt (``edge_review_prompt``) and the MCP tool
+    (``propose_edge_candidates``) so the retrieval logic is not duplicated.
+    Returns an empty list when no ingest has run or all pairs were above threshold.
+    """
+    from engine.extractor import ContextExtractor
+    store = _get_store(workspace_path)
+    extractor = ContextExtractor(store)
+    return extractor.get_pending_edge_candidates(limit=limit)
+
+
 @mcp.prompt()
-def propose_edge_candidates(
+def edge_review_prompt(
     workspace_path: str = None,
     limit: int = 50,
 ) -> str:
-    """Return a prompt for the host LLM (e.g. Copilot Chat) to review ambiguous
-    edge candidates that the heuristic mapper did not emit automatically.
+    """Return a prompt for the host LLM (e.g. Copilot Chat / Cursor / Roo-Code) to
+    review ambiguous edge candidates that the heuristic mapper did not emit automatically.
 
     The host LLM executes this prompt with its own model and credentials —
     the MCP server does NOT call any external LLM.  After Copilot returns a
     JSON array, pass it to ``apply_edge_proposals``.
+
+    Renamed from ``propose_edge_candidates`` (prompt) to avoid a name collision with
+    the new ``propose_edge_candidates`` MCP *tool* (see below). Existing clients using
+    the prompt should update their invocation to ``edge_review_prompt``.
 
     Args:
         workspace_path: Target workspace; defaults to the most-recently ingested one.
@@ -760,17 +777,10 @@ def propose_edge_candidates(
     from engine.prompts.edge_proposal import render_edge_proposal_prompt
 
     try:
-        store = _get_store(workspace_path)
+        candidates = _fetch_edge_candidates(workspace_path, limit)
     except (LookupError, FileNotFoundError) as exc:
         return (f"# Error: workspace not found\n{exc}\n\n"
                 "Run `ingest_workspace(workspace_path)` first.")
-
-    # The extractor is the authoritative holder of last_candidates.
-    # Re-use the cached extractor if available (WorkspaceRegistry stores it);
-    # fall back to constructing one (candidates will be empty until an ingest).
-    from engine.extractor import ContextExtractor
-    extractor = ContextExtractor(store)
-    candidates = extractor.get_pending_edge_candidates(limit=limit)
 
     if not candidates:
         return (
@@ -781,6 +791,44 @@ def propose_edge_candidates(
         )
 
     return render_edge_proposal_prompt(candidates)
+
+
+@mcp.tool()
+def propose_edge_candidates(
+    workspace_path: str = None,
+    limit: int = 100,
+) -> str:
+    """Return sub-threshold TF-IDF edge candidates as JSON for the relationship-linker agent.
+
+    Called by the ``relationship-linker`` subagent during Pass 2 of its three-pass
+    edge-emission strategy.  Returns the raw candidate list so the agent can apply
+    LLM judgement to each pair independently and emit ``add_edge`` calls for those
+    it accepts.
+
+    Unlike the ``edge_review_prompt`` MCP *prompt* (which renders an LLM-review
+    template for human-in-the-loop Cursor / Roo-Code flows), this *tool* returns
+    structured JSON that the agent can parse and iterate over programmatically.
+
+    Args:
+        workspace_path: Target workspace; defaults to the most-recently ingested one.
+        limit: Maximum candidates to return (default 100; SPEC-1 §3.1 Pass 2 uses 100).
+
+    Returns:
+        JSON object: ``{"count": N, "candidates": [{source_id, target_id,
+        proposed_relationship, score, rationale, source_excerpt, target_excerpt}, ...]}``.
+        Returns ``{"count": 0, "candidates": []}`` when no ingest has run or all
+        pairs were above the auto-emit threshold.
+    """
+    try:
+        candidates = _fetch_edge_candidates(workspace_path, limit)
+    except (LookupError, FileNotFoundError) as exc:
+        return json.dumps({
+            "error": "WORKSPACE_NOT_FOUND",
+            "detail": str(exc),
+            "hint": "Run ingest_workspace(workspace_path) first.",
+        })
+
+    return json.dumps({"count": len(candidates), "candidates": candidates}, indent=2)
 
 
 @mcp.tool()
@@ -889,14 +937,14 @@ def request_edge_review(
 ) -> str:
     """Convenience helper: return the edge-review prompt for the chat host to execute.
 
-    Equivalent to invoking the ``propose_edge_candidates`` prompt manually.
+    Equivalent to invoking the ``edge_review_prompt`` MCP prompt manually.
     Some MCP clients (Cursor, Roo-Code) re-inject long tool responses into the
     chat context, making this a single-call shortcut for the two-step workflow.
 
     After the host LLM responds with a JSON array, pass it to
     ``apply_edge_proposals``.
     """
-    return propose_edge_candidates(workspace_path=workspace_path, limit=limit)
+    return edge_review_prompt(workspace_path=workspace_path, limit=limit)
 
 
 # ── Spec 009: Parallel ingestion tools ───────────────────────────────────────
