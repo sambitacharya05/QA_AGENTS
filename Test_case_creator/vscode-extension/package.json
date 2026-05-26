@@ -57,8 +57,31 @@
       "properties": {
         "testCaseCreator.areaPath": {
           "type": "string",
-          "default": "TechInsurance\\Claims",
-          "description": "Target Azure DevOps Area Path for exported test cases."
+          "default": "<dummy>",
+          "description": "Fallback Azure DevOps area path. Used ONLY when module_analyzer cannot derive area_path from the graph (no product_feature node with parent_product_name metadata). The placeholder default '<dummy>' makes unresolved fallbacks visible in CSV output instead of silently mislabelling test cases."
+        },
+        "testCaseCreator.tcIdSchema.featureSlugMaxLength": {
+          "type": "integer",
+          "default": 12,
+          "minimum": 3,
+          "maximum": 24,
+          "description": "Maximum length of the SHORT_FEATURE slug in generated tc_id values (TC_<SHORT_FEATURE>_<KIND>_<NNN>)."
+        },
+        "testCaseCreator.tcIdSchema.sequenceFilePath": {
+          "type": "string",
+          "default": ".test_artifacts/tc_sequence.json",
+          "description": "Workspace-relative path where TcSequenceStore persists per-feature TC counters across runs."
+        },
+        "testCaseCreator.coverageReport.includeAnomaliesSection": {
+          "type": "boolean",
+          "default": true,
+          "description": "Include a Behavioral Anomalies section in the coverage report Markdown output."
+        },
+        "testCaseCreator.coverageReport.anomalyCriticalThreshold": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 0,
+          "description": "Number of critical-severity anomalies that triggers a top-of-report WARNING banner."
         },
         "testCaseCreator.maxCorrectionIterations": {
           "type": "integer",

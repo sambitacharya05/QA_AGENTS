@@ -162,6 +162,8 @@ export function activate(context: vscode.ExtensionContext) {
         await handleStatus(workspaceRoot, stream);
       } else if (command === "view") {
         await handleView(workspaceRoot, stream);
+      } else if (command === "anomalies") {
+        await handleAnomalies(stream, prompt);
       } else if (command === "help") {
         if (stream)
           stream.markdown(BUILD_CONTEXT_HELP_TEXT);
@@ -175,7 +177,8 @@ export function activate(context: vscode.ExtensionContext) {
               "*   `/query <keyword>` - Search the graph store directly.\n" +
               "*   `/trace <rule_id>` - Print rule traceability to tech endpoints & tests.\n" +
               "*   `/status` - Check if context database is synchronized with files.\n" +
-              "*   `/view` - Open an interactive visual diagram of the Context Graph inside your IDE!",
+              "*   `/view` - Open an interactive visual diagram of the Context Graph inside your IDE!\n" +
+              "*   `/anomalies [severity]` - Review behavioral anomalies recorded by the relationship-linker. Optional severity filter: `critical`, `warning`, or `info`.",
           );
       }
     },
@@ -314,124 +317,127 @@ async function handleIngest(
     }
     // ────────────────────────────────────────────────────────────────────────
 
-    const rulePromptPath = path.join(
-      workspaceRoot,
-      ".github",
-      "agents",
-      "rule_extractor.agent.md",
-    );
-    const rulePrompt = fs.existsSync(rulePromptPath)
-      ? fs.readFileSync(rulePromptPath, "utf8")
-      : "";
-
-    const techPromptPath = path.join(
-      workspaceRoot,
-      ".github",
-      "agents",
-      "tech_mapper.agent.md",
-    );
-    const techPrompt = fs.existsSync(techPromptPath)
-      ? fs.readFileSync(techPromptPath, "utf8")
-      : "";
-
-    const linkPromptPath = path.join(
-      workspaceRoot,
-      ".github",
-      "agents",
-      "relationship_linker.agent.md",
-    );
-    const linkPrompt = fs.existsSync(linkPromptPath)
-      ? fs.readFileSync(linkPromptPath, "utf8")
-      : "";
-
     const rawDocs = await mcpClient.callTool("get_raw_documents");
-    const docs = JSON.parse(rawDocs);
+    const docs: Array<{ path: string; content: string }> = JSON.parse(rawDocs);
 
-    // Stage 2 (rule extraction) only needs spec/requirements files.
-    // Stage 3 (tech mapping) only needs code/feature files.
-    // Sending all 26 files (158 KB) to every LLM call burns ~40 K tokens per round
-    // and triggers extended-reasoning mode, which drains Copilot premium requests.
-    const SPEC_EXTS   = new Set([".docx", ".pdf", ".xlsx", ".csv", ".md"]);
-    const CODE_EXTS   = new Set([".java", ".ts", ".tsx", ".js", ".py", ".feature"]);
-
-    const specContext = docs
-      .filter((d: any) => SPEC_EXTS.has(path.extname(d.path).toLowerCase()))
-      .map((d: any) => `### FILE: ${d.path}\n${d.content}\n`)
-      .join("\n");
-
-    const codeContext = docs
-      .filter((d: any) => CODE_EXTS.has(path.extname(d.path).toLowerCase()))
-      .map((d: any) => `### FILE: ${d.path}\n${d.content}\n`)
-      .join("\n");
-
-    const businessRuleTool: vscode.LanguageModelChatTool = {
-      name: "add_business_rule_node",
+    // SPEC-2 Wave 1: generic tool declarations replace the retired pseudo-tools
+    // (add_business_rule_node / add_tech_component_node / add_semantic_edge).
+    // Agents now call the real MCP tools directly with node_type as a parameter.
+    const addNodeTool: vscode.LanguageModelChatTool = {
+      name: "add_node",
       description:
-        "Records an identified business rule or product feature in the database.",
+        "Registers a node in the Semantic Context Graph. node_type must be one of the supported types " +
+        "(business_rule, validation_rule, eligibility_rule, ui_business_rule, security_rule, " +
+        "product_feature, field_specification, api_endpoint, data_model, code_component, " +
+        "test_scenario, ui_page_object, ui_element, rule_constant, test_utility). " +
+        "metadata MUST include sync_governance.caller='agent'.",
       inputSchema: {
         type: "object" as const,
         properties: {
-          id: { type: "string" },
-          type: { type: "string" },
+          node_id: { type: "string", description: "Stable ID, prefix per node_type (see SPEC-1 §0.3)" },
+          node_type: { type: "string", description: "One of the supported node types" },
           name: { type: "string" },
           description: { type: "string" },
           metadata: {
             type: "string",
             description:
-              "Optional JSON string of metadata including source_file, implementation_status, and code_expression_profile",
+              "JSON string. MUST include sync_governance, source_file, extraction_mode.",
           },
         },
-        required: ["id", "type", "name", "description"],
+        required: ["node_id", "node_type", "name", "description", "metadata"],
       },
     };
 
-    const techComponentTool: vscode.LanguageModelChatTool = {
-      name: "add_tech_component_node",
+    const addEdgeTool: vscode.LanguageModelChatTool = {
+      name: "add_edge",
       description:
-        "Registers an API endpoint or data model schema in the database.",
-      inputSchema: {
-        type: "object" as const,
-        properties: {
-          id: { type: "string" },
-          type: { type: "string" },
-          name: { type: "string" },
-          description: { type: "string" },
-          metadata: {
-            type: "string",
-            description:
-              "Optional JSON string of metadata including source_file and technical details",
-          },
-        },
-        required: ["id", "type", "name", "description"],
-      },
-    };
-
-    const semanticEdgeTool: vscode.LanguageModelChatTool = {
-      name: "add_semantic_edge",
-      description:
-        "Registers a logical connection or edge between two existing nodes.",
+        "Registers a directed edge in the Semantic Context Graph. relationship must be allowed by " +
+        "edge_policy.json for the (source_type, target_type) pair. metadata must include " +
+        "source='agent:<agent-name>' and confidence.",
       inputSchema: {
         type: "object" as const,
         properties: {
           source_id: { type: "string" },
           target_id: { type: "string" },
-          relationship: { type: "string" },
+          relationship: {
+            type: "string",
+            description:
+              "TESTS|IMPLEMENTS|VALIDATES|USES_MODEL|MAPS_TO|REFERENCES|CALLS|USES_DATA|PART_OF",
+          },
+          metadata: {
+            type: "string",
+            description: "JSON string with source, confidence, rationale.",
+          },
         },
-        required: ["source_id", "target_id", "relationship"],
+        required: ["source_id", "target_id", "relationship", "metadata"],
       },
+    };
+
+    const querySemanticGraphTool: vscode.LanguageModelChatTool = {
+      name: "query_semantic_graph",
+      description:
+        "Read-only graph lookup. Returns nodes matching the query string and optional node_type filter. " +
+        "Agents call this BEFORE add_node to avoid duplicating existing canonical nodes.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          query: { type: "string", description: "Concept name to search for; empty string lists all." },
+          node_type: { type: "string", description: "Optional type filter." },
+        },
+        required: ["query"],
+      },
+    };
+
+    // SPEC-2 Wave 2: read-only tools added for the broader agent surface.
+    const getRawDocsTool: vscode.LanguageModelChatTool = {
+      name: "get_raw_documents",
+      description:
+        "Returns all parsed raw document text content. Filter callsites client-side.",
+      inputSchema: { type: "object" as const, properties: {}, required: [] },
+    };
+
+    const getAllEdgesTool: vscode.LanguageModelChatTool = {
+      name: "get_all_edges",
+      description:
+        "Returns all edges in the graph. The linker uses this to detect missing/duplicate edges and orphan nodes.",
+      inputSchema: { type: "object" as const, properties: {}, required: [] },
+    };
+
+    const proposeEdgeCandidatesTool: vscode.LanguageModelChatTool = {
+      name: "propose_edge_candidates",
+      description:
+        "Returns sub-threshold TF-IDF edge candidates from the heuristic mapper as a shortlist for LLM validation.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          limit: { type: "number", description: "Max candidates returned. Default 100." },
+        },
+        required: [],
+      },
+    };
+
+    const TOOL_REGISTRY: Record<string, vscode.LanguageModelChatTool> = {
+      add_node: addNodeTool,
+      add_edge: addEdgeTool,
+      query_semantic_graph: querySemanticGraphTool,
+      get_raw_documents: getRawDocsTool,
+      get_all_edges: getAllEdgesTool,
+      propose_edge_candidates: proposeEdgeCandidatesTool,
+    };
+
+    const toolsForAgent = (agentId: AgentId): vscode.LanguageModelChatTool[] => {
+      const perm = AGENT_TOOL_PERMISSIONS[agentId];
+      return [...perm.canWrite, ...perm.canRead].map((n) => TOOL_REGISTRY[n]);
     };
 
     const toolHandler = async (
       name: string,
       input: Record<string, unknown>,
     ): Promise<unknown> => {
-      if (
-        name === "add_business_rule_node" ||
-        name === "add_tech_component_node"
-      ) {
+      if (name === "add_node") {
         await mcpClient.callTool("add_node", {
-          node_id: input.id,
-          node_type: input.type,
+          node_id: input.node_id,
+          node_type: input.node_type,
           name: input.name,
           description: input.description,
           metadata:
@@ -440,14 +446,36 @@ async function handleIngest(
               : JSON.stringify(input.metadata ?? {}),
         });
         return { success: true };
-      } else if (name === "add_semantic_edge") {
+      }
+      if (name === "add_edge") {
         await mcpClient.callTool("add_edge", {
           source_id: input.source_id,
           target_id: input.target_id,
           relationship: input.relationship,
-          metadata: "{}",
+          metadata:
+            typeof input.metadata === "string"
+              ? input.metadata
+              : JSON.stringify(input.metadata ?? {}),
         });
         return { success: true };
+      }
+      if (name === "query_semantic_graph") {
+        const raw = await mcpClient.callTool("query_semantic_graph", {
+          query: typeof input.query === "string" ? input.query : "",
+          ...(input.node_type ? { node_type: input.node_type } : {}),
+        });
+        return raw;
+      }
+      if (name === "get_raw_documents") {
+        return await mcpClient.callTool("get_raw_documents");
+      }
+      if (name === "get_all_edges") {
+        return await mcpClient.callTool("get_all_edges");
+      }
+      if (name === "propose_edge_candidates") {
+        return await mcpClient.callTool("propose_edge_candidates", {
+          ...(typeof input.limit === "number" ? { limit: input.limit } : {}),
+        });
       }
       throw new Error(`Unknown tool: ${name}`);
     };
@@ -467,92 +495,403 @@ async function handleIngest(
     }
     const modelLabel = resolvedModel.name ?? resolvedModel.family ?? "Copilot";
 
+    // ── Stage 2: Pre-flight agent scan ──────────────────────────────────────
+    const agentsToRun = scanIngestForAgents(ingestDir);
+    const extractors = Array.from(agentsToRun).filter(
+      (a) => a !== "relationship-linker",
+    );
     if (stream)
       stream.markdown(
-        `**Stage 2/4: Rule Extraction...** Running rule extractor subagent using **${modelLabel}**...\n`,
+        `**Stage 2/4: Pre-flight scan...** ${extractors.length} extractor(s) to dispatch: ${extractors.join(", ") || "(none)"}.\n\n`,
       );
-    try {
-      await runLLMAgentWithTools(
-        `${rulePrompt}\n\nExtract all insurance business rules and product features from these specification documents:\n\n${specContext}`,
-        [businessRuleTool],
+
+    // ── Stage 3: Extractor agents in parallel (SPEC-2 Wave 2) ──────────────
+    if (stream)
+      stream.markdown(
+        `**Stage 3/4: Parallel extraction (${extractors.length} agents)** using **${modelLabel}**.\n`,
+      );
+
+    const extractorTasks: Promise<void>[] = extractors.map((agentId) =>
+      runAgent(
+        agentId,
+        workspaceRoot,
+        docs,
+        toolsForAgent(agentId),
         toolHandler,
-        resolvedModel,
+        resolvedModel!,
+        stream,
         token,
-      );
+      ),
+    );
+    await Promise.allSettled(extractorTasks);
+
+    // ── Stage 4: Relationship Linker (SPEC-2 Wave 3) ───────────────────────
+    if (agentsToRun.has("relationship-linker")) {
       if (stream)
         stream.markdown(
-          `  ✅ Successfully executed Rule Extraction using **${modelLabel}**.\n\n`,
+          `**Stage 4/4: Relationship Linker** using **${modelLabel}**.\n`,
         );
-    } catch (err) {
-      if (stream) stream.markdown(`  ⚠️ Rule extraction failed: ${err}.\n\n`);
-    }
-
-    if (stream)
-      stream.markdown(
-        `**Stage 3/4: Technical Component Mapping...** Running technical mapper subagent using **${modelLabel}**...\n`,
-      );
-    try {
-      await runLLMAgentWithTools(
-        `${techPrompt}\n\nExtract all API endpoints and data model schemas from these code files:\n\n${codeContext}`,
-        [techComponentTool],
+      // Linker reads the post-extraction graph, so it doesn't need the raw
+      // docs context — its toolset includes get_all_edges / propose_edge_candidates
+      // / record_anomaly instead.
+      await runAgent(
+        "relationship-linker",
+        workspaceRoot,
+        [],
+        toolsForAgent("relationship-linker"),
         toolHandler,
         resolvedModel,
+        stream,
         token,
       );
-      if (stream)
-        stream.markdown(
-          `  ✅ Successfully executed Technical Mapping using **${modelLabel}**.\n\n`,
-        );
-    } catch (err) {
-      if (stream) stream.markdown(`  ⚠️ Technical mapping failed: ${err}.\n\n`);
     }
 
-    if (stream)
-      stream.markdown(
-        `**Stage 4/4: Relationship Linking...** Running relationship linker subagent using **${modelLabel}**...\n`,
-      );
-    try {
-      const currentNodesRaw = await mcpClient.callTool("query_semantic_graph", {
-        query: "",
-      });
-      // query_semantic_graph returns ToolResponse<QueryResult>; nodes live in .results
-      const queryResult = unwrapMCP<{ results: any[] }>(JSON.parse(currentNodesRaw));
-      const nodesListContext = (queryResult.results ?? []).map((n: any) => ({
-        id: n.id,
-        type: n.type,
-        name: n.name,
-        description: n.description,
-      }));
-
-      await runLLMAgentWithTools(
-        `${linkPrompt}\n\nEstablish all valid logical connections (edges) between these discovered entities:\n\n${JSON.stringify(nodesListContext, null, 2)}`,
-        [semanticEdgeTool],
-        toolHandler,
-        resolvedModel,
-        token,
-      );
-      if (stream)
-        stream.markdown(
-          `  ✅ Successfully executed Relationship Linking using **${modelLabel}**.\n\n`,
-        );
-    } catch (err) {
-      if (stream)
-        stream.markdown(`  ⚠️ Relationship linker failed: ${err}.\n\n`);
-    }
-
-    const graphSummary = await mcpClient.callTool("get_graph_summary");
-    const counts = JSON.parse(graphSummary);
-
-    if (stream)
-      stream.markdown(
-        `### 🎉 CONTEXT SYNCHRONIZATION COMPLETE!\n\n` +
-          `The Semantic Context Graph has been fully updated.\n` +
-          `*   **Total Entities Discovered**: ${counts.total_nodes}\n` +
-          `*   **Total Logical Connections**: ${counts.total_edges}\n\n` +
-          `You can run \`/view\` now to explore your graph visually!`,
-      );
+    // ── Stage 5: Enriched summary with anomaly breakdown ───────────────────
+    await emitEnrichedSummary(stream);
   } catch (err) {
     if (stream) stream.markdown(`❌ Failed to complete ingestion: ${err}`);
+  }
+}
+
+async function emitEnrichedSummary(
+  stream?: vscode.ChatResponseStream,
+): Promise<void> {
+  let graphPayload: Record<string, unknown> = {};
+  let driftPayload: Record<string, unknown> = {};
+  try {
+    const [graphRaw, driftRaw] = await Promise.all([
+      mcpClient.callTool("get_graph_summary"),
+      mcpClient.callTool("get_behavioral_drift_report"),
+    ]);
+    graphPayload = JSON.parse(graphRaw);
+    driftPayload = JSON.parse(driftRaw);
+  } catch (err) {
+    if (stream)
+      stream.markdown(`⚠️ Could not build summary: ${err}\n`);
+    return;
+  }
+
+  const nodeTypes = (graphPayload.node_types_breakdown ?? {}) as Record<string, number>;
+  const relBreakdown = (graphPayload.relationships_breakdown ?? {}) as Record<string, number>;
+  const byKind = (driftPayload.by_kind ?? {}) as Record<string, number>;
+  const nodeAnomalies = (driftPayload.node_anomalies ?? []) as unknown[];
+  const driftEdges = (driftPayload.drift_edges ?? []) as unknown[];
+  const totalAnomalies = nodeAnomalies.length + driftEdges.length;
+
+  const fmt = (obj: Record<string, number>) =>
+    Object.entries(obj)
+      .map(([k, v]) => `- ${k}: ${v}`)
+      .join("\n") || "- (none)";
+
+  if (stream) {
+    stream.markdown(
+      `### 📊 Ingest Summary\n\n` +
+      `**Total entities**: ${graphPayload.total_nodes ?? 0}\n` +
+      `**Total edges**: ${graphPayload.total_edges ?? 0}\n\n` +
+      `**Nodes by type**\n${fmt(nodeTypes)}\n\n` +
+      `**Edges by relationship**\n${fmt(relBreakdown)}\n\n` +
+      `**Behavioral anomalies: ${totalAnomalies}**\n` +
+      `- ui_without_requirement: ${byKind.ui_without_requirement ?? 0}\n` +
+      `- rule_without_implementation: ${byKind.rule_without_implementation ?? 0}\n` +
+      `- constant_spec_divergence: ${byKind.constant_spec_divergence ?? 0} ⚠️ (critical)\n` +
+      `- endpoint_without_test: ${byKind.endpoint_without_test ?? 0}\n\n` +
+      `Run \`/anomalies\` to review individual records, or \`/view\` to explore the graph.\n`,
+    );
+  }
+}
+
+// SPEC-2 Wave 3 §3.3: /anomalies slash command.
+async function handleAnomalies(
+  stream: vscode.ChatResponseStream | undefined,
+  filter?: string,
+): Promise<void> {
+  if (!stream) return;
+  let drift: Record<string, unknown>;
+  try {
+    const raw = await mcpClient.callTool("get_behavioral_drift_report");
+    drift = JSON.parse(raw);
+  } catch (err) {
+    stream.markdown(`❌ Could not fetch behavioral drift report: ${err}`);
+    return;
+  }
+
+  const records = (drift.node_anomalies ?? []) as Array<{
+    node_id: string;
+    anomaly_kind: string;
+    severity: string;
+    evidence: { summary?: string; source_file?: string };
+    suggested_action?: string;
+  }>;
+
+  const sev = filter?.trim().toLowerCase();
+  const filtered = sev
+    ? records.filter((r) => r.severity === sev)
+    : records;
+
+  if (filtered.length === 0) {
+    stream.markdown(
+      `✅ No anomalies recorded${sev ? ` at severity '${sev}'` : ""}.`,
+    );
+    return;
+  }
+
+  stream.markdown(
+    `### ${filtered.length} Behavioral Anomalies${sev ? ` (${sev})` : ""}\n\n`,
+  );
+  for (const r of filtered) {
+    const icon =
+      r.severity === "critical" ? "🔴" :
+      r.severity === "warning" ? "🟡" : "ℹ️";
+    let body =
+      `${icon} **${r.anomaly_kind}** — \`${r.node_id}\`\n` +
+      `  - ${r.evidence?.summary ?? "(no summary)"}\n`;
+    if (r.evidence?.source_file) {
+      body += `  - Source: \`${r.evidence.source_file}\`\n`;
+    }
+    if (r.suggested_action) {
+      body += `  - Suggested: ${r.suggested_action}\n`;
+    }
+    body += "\n";
+    stream.markdown(body);
+  }
+}
+
+// ── SPEC-2 Wave 1: agent-dispatch helpers ──────────────────────────────────
+
+type AgentId =
+  | "rule-extractor"
+  | "field-spec-parser"
+  | "api-contract-mapper"
+  | "test-infra-mapper"
+  | "coding-standards-extractor"
+  | "relationship-linker";
+
+interface AgentTrigger {
+  extensions: string[];
+  pathPatterns?: RegExp[];
+  contentSniff?: (sample: string, filename: string) => boolean;
+}
+
+// SPEC-2 Wave 2: file-extension manifest is the single source of truth for
+// dispatch. Each agent's pathPatterns are advisory (prioritise scanning).
+// contentSniff is the gate that decides routing per-file.
+const AGENT_TRIGGERS: Record<AgentId, AgentTrigger> = {
+  "rule-extractor": {
+    extensions: [".docx", ".pdf", ".md", ".xlsx"],
+  },
+  "field-spec-parser": {
+    extensions: [".xlsx", ".csv"],
+  },
+  "api-contract-mapper": {
+    extensions: [".json", ".yaml", ".yml", ".java", ".ts"],
+    pathPatterns: [/\/api\//i, /\/schemas?\//i, /\/openapi\//i, /\/dto\//i, /\/payloads?\//i],
+    contentSniff: (sample, filename) => {
+      const ext = path.extname(filename).toLowerCase();
+      if ([".json", ".yaml", ".yml"].includes(ext)) {
+        const head = sample.slice(0, 2000);
+        return /\b(openapi|swagger)\s*[:"]/.test(head)
+          || /"\$schema"\s*:/.test(head)
+          || /"type"\s*:\s*"object"/.test(head);
+      }
+      if (ext === ".java") {
+        return /\bRestAssured\b|\bgiven\(\)/.test(sample)
+          || /@Data\b|@Builder\b/.test(sample);
+      }
+      if (ext === ".ts") {
+        return /\brequest\.(post|get|put|delete|patch)\(/.test(sample)
+          || /\bapiContext\b|\bAPIRequestContext\b/.test(sample)
+          || /\binterface\s+\w+\s*\{/.test(sample);
+      }
+      return false;
+    },
+  },
+  "test-infra-mapper": {
+    extensions: [".feature", ".java", ".ts", ".properties", ".loc", ".csv", ".xlsx", ".json"],
+    pathPatterns: [
+      /\/pages?\//i, /\/page_objects?\//i, /\/pom\//i,
+      /\/steps?\//i, /\/stepdefs?\//i,
+      /\/features?\//i,
+      /\/testdata\//i, /\/resources\//i, /\/locators?\//i, /\/objectrepo\//i,
+    ],
+    contentSniff: (sample, filename) => {
+      const ext = path.extname(filename).toLowerCase();
+      if (ext === ".feature") return true;
+      if (ext === ".properties" || ext === ".loc") return true;
+      if (ext === ".java") {
+        return /@FindBy\b|@QAFTestStep\b|@Given\b|@When\b|@Then\b/.test(sample)
+          || /extends\s+\w*Page\b/.test(sample);
+      }
+      if (ext === ".ts") {
+        return /page\.locator\(|page\.getBy\w+\(|defineStep\(/.test(sample);
+      }
+      return false;
+    },
+  },
+  "coding-standards-extractor": {
+    extensions: [".java", ".ts", ".tsx", ".js", ".py"],
+    pathPatterns: [
+      /\/utils?\//i, /\/utilities\//i, /\/helpers\//i,
+      /\/common\//i, /\/shared\//i, /\/lib\//i, /\/base\//i, /\/framework\//i,
+    ],
+  },
+  "relationship-linker": { extensions: [] },
+};
+
+const AGENT_PROMPT_FILES: Record<AgentId, string> = {
+  "rule-extractor": "rule_extractor.agent.md",
+  "field-spec-parser": "field_spec_parser.agent.md",
+  "api-contract-mapper": "api_contract_mapper.agent.md",
+  "test-infra-mapper": "test_infra_mapper.agent.md",
+  "coding-standards-extractor": "coding_standards_extractor.agent.md",
+  "relationship-linker": "relationship_linker.agent.md",
+};
+
+const AGENT_TASK_INSTRUCTION: Record<AgentId, string> = {
+  "rule-extractor":
+    "Extract every functional, validation, eligibility, UI, security, and NFR business rule from these requirement documents. Emit one atomic node per constraint per the rules in your prompt.",
+  "field-spec-parser":
+    "Decompose any field-spec sheet (header tokens include field_id/field_name/type/length/mandatory) into one field_specification node per row. Emit MAPS_TO edges (confidence ≥ 0.6) to existing rule nodes via query_semantic_graph.",
+  "api-contract-mapper":
+    "Extract api_endpoint nodes (documented or test-code-inferred) and data_model nodes (one per DTO/schema, fields-in-metadata). Emit USES_MODEL edges where the source explicitly references the schema. Do NOT extract Spring/NestJS controllers.",
+  "test-infra-mapper":
+    "Extract test_scenario (one per Scenario/Outline with examples in metadata, Background merged), ui_page_object + ui_element from page-object classes, code_component per step-def class, and test_utility per utility class. Wire MAPS_TO edges from parser-emitted rule_constants to matching rule nodes (confidence ≥ 0.6).",
+  "coding-standards-extractor":
+    "Walk utility folders (utils/, utilities/, helpers/) and emit enriched test_utility nodes. Add small structured coding_standards_observation metadata blocks to representative ui_page_object / code_component / data_model nodes. Do NOT emit edges.",
+  "relationship-linker": "",
+};
+
+function scanIngestForAgents(ingestDir: string): Set<AgentId> {
+  const present = new Set<AgentId>();
+  if (!fs.existsSync(ingestDir)) return present;
+
+  const PRUNE = new Set([
+    "node_modules", ".git", "target", "build", "dist",
+    ".gradle", ".idea", ".vscode", ".context_builder",
+    "__pycache__", "venv", ".venv",
+  ]);
+
+  const considerFile = (full: string, ext: string) => {
+    let sampled: string | null = null;
+    const readSample = (): string => {
+      if (sampled === null) {
+        try {
+          sampled = fs.readFileSync(full, "utf8").slice(0, 8192);
+        } catch {
+          sampled = "";
+        }
+      }
+      return sampled;
+    };
+
+    for (const agentId of Object.keys(AGENT_TRIGGERS) as AgentId[]) {
+      if (present.has(agentId)) continue;
+      const trigger = AGENT_TRIGGERS[agentId];
+      if (!trigger.extensions.includes(ext)) continue;
+      if (trigger.contentSniff && !trigger.contentSniff(readSample(), full)) continue;
+      present.add(agentId);
+    }
+  };
+
+  const walk = (dir: string) => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) {
+        if (!PRUNE.has(e.name)) walk(full);
+        continue;
+      }
+      considerFile(full, path.extname(e.name).toLowerCase());
+    }
+  };
+
+  walk(ingestDir);
+  // SPEC-2 Wave 2: linker always runs after extractors complete.
+  if (present.size > 0) present.add("relationship-linker");
+  return present;
+}
+
+// SPEC-2 Wave 2: per-agent tool-permission matrix. The orchestrator passes
+// each agent only the LanguageModelChatTool entries it is authorised to use,
+// so e.g. the linker cannot accidentally call add_edge during coding-standards work.
+interface ToolPermissions {
+  canWrite: ("add_node" | "add_edge")[];
+  canRead: ("query_semantic_graph" | "get_raw_documents" | "get_all_edges" | "propose_edge_candidates")[];
+}
+
+const AGENT_TOOL_PERMISSIONS: Record<AgentId, ToolPermissions> = {
+  "rule-extractor":             { canWrite: ["add_node"],             canRead: ["query_semantic_graph", "get_raw_documents"] },
+  "field-spec-parser":          { canWrite: ["add_node", "add_edge"], canRead: ["query_semantic_graph", "get_raw_documents"] },
+  "api-contract-mapper":        { canWrite: ["add_node", "add_edge"], canRead: ["query_semantic_graph", "get_raw_documents"] },
+  "test-infra-mapper":          { canWrite: ["add_node", "add_edge"], canRead: ["query_semantic_graph", "get_raw_documents"] },
+  "coding-standards-extractor": { canWrite: ["add_node"],             canRead: ["query_semantic_graph", "get_raw_documents"] },
+  "relationship-linker":        { canWrite: ["add_node", "add_edge"], canRead: ["query_semantic_graph", "get_all_edges", "propose_edge_candidates"] },
+};
+
+function contextForAgent(
+  agentId: AgentId,
+  docs: Array<{ path: string; content: string }>,
+): string {
+  const trigger = AGENT_TRIGGERS[agentId];
+  const allowed = new Set(trigger.extensions.map((e) => e.toLowerCase()));
+  return docs
+    .filter((d) => {
+      const ext = path.extname(d.path).toLowerCase();
+      if (!allowed.has(ext)) return false;
+      // SPEC-2 Wave 2: honour the same contentSniff used at scan time so the
+      // agent only sees files that actually match its routing criteria.
+      if (trigger.contentSniff && !trigger.contentSniff(d.content.slice(0, 8192), d.path)) {
+        return false;
+      }
+      return true;
+    })
+    .map((d) => `### FILE: ${d.path}\n${d.content}\n`)
+    .join("\n");
+}
+
+async function runAgent(
+  agentId: AgentId,
+  workspaceRoot: string,
+  docs: Array<{ path: string; content: string }>,
+  tools: vscode.LanguageModelChatTool[],
+  toolHandler: (name: string, input: Record<string, unknown>) => Promise<unknown>,
+  model: vscode.LanguageModelChat,
+  stream?: vscode.ChatResponseStream,
+  token?: vscode.CancellationToken,
+): Promise<void> {
+  const promptPath = path.join(
+    workspaceRoot,
+    ".github",
+    "agents",
+    AGENT_PROMPT_FILES[agentId],
+  );
+  if (!fs.existsSync(promptPath)) {
+    if (stream)
+      stream.markdown(`  ⚠️ ${agentId}: prompt file not found at ${promptPath}; skipping.\n`);
+    return;
+  }
+  const prompt = fs.readFileSync(promptPath, "utf8");
+  const context = contextForAgent(agentId, docs);
+  if (!context.trim()) {
+    if (stream)
+      stream.markdown(`  ℹ️ ${agentId}: no applicable files in ingest; skipping.\n`);
+    return;
+  }
+  try {
+    await runLLMAgentWithTools(
+      `${prompt}\n\n${AGENT_TASK_INSTRUCTION[agentId]}\n\n${context}`,
+      tools,
+      toolHandler,
+      model,
+      token,
+    );
+    if (stream) stream.markdown(`  ✅ ${agentId} completed.\n`);
+  } catch (err) {
+    if (stream) stream.markdown(`  ⚠️ ${agentId} failed: ${err}\n`);
   }
 }
 

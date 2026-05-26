@@ -40,11 +40,43 @@ def _make_dispatcher(tmp_path) -> tuple[ParseDispatcher, GraphStore]:
 class TestStampOrigin:
     """Governance stamp is applied iff the extension is in DOC_ORIGIN_EXTS."""
 
-    @pytest.mark.parametrize("ext", [".docx", ".xlsx", ".pdf", ".md"])
+    # SPEC-3 Wave 2: .properties and .loc joined the DOC_ORIGIN_EXTS set.
+    @pytest.mark.parametrize(
+        "ext",
+        [".docx", ".xlsx", ".pdf", ".md", ".properties", ".loc"],
+    )
     def test_doc_extensions_get_origin_stamp(self, tmp_path, ext):
         dispatcher, _ = _make_dispatcher(tmp_path)
         entity = {"id": "x", "type": "business_rule", "name": "X", "metadata": {}}
         df = _make_df(f"/ws/req{ext}", ext)
+        result = dispatcher.stamp_origin(entity, df)
+        assert result["metadata"]["sync_governance"]["origin"] == "documentation"
+
+    def test_properties_file_entities_get_documentation_lock(self, tmp_path):
+        """SPEC-3 Wave 2 §2.4: rule_constant nodes from .properties files are
+        governance-locked so agents cannot overwrite them."""
+        dispatcher, _ = _make_dispatcher(tmp_path)
+        entity = {
+            "id": "rule_constant_dob_min_age",
+            "type": "rule_constant",
+            "name": "Rule Constant: dob.min.age",
+            "metadata": {},
+        }
+        df = _make_df("/ws/application.properties", ".properties")
+        result = dispatcher.stamp_origin(entity, df)
+        assert result["metadata"]["sync_governance"]["origin"] == "documentation"
+
+    def test_loc_file_entities_get_documentation_lock(self, tmp_path):
+        """SPEC-3 Wave 2 §2.4: ui_element nodes from .loc files are
+        governance-locked so agents cannot overwrite them."""
+        dispatcher, _ = _make_dispatcher(tmp_path)
+        entity = {
+            "id": "ui_element_btn_send_otp",
+            "type": "ui_element",
+            "name": "BTN_SEND_OTP",
+            "metadata": {},
+        }
+        df = _make_df("/ws/pages/login.loc", ".loc")
         result = dispatcher.stamp_origin(entity, df)
         assert result["metadata"]["sync_governance"]["origin"] == "documentation"
 

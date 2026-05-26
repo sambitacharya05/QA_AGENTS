@@ -11,13 +11,13 @@ suite('Coverage Reporter and Traceability Test Suite', () => {
   test('Rule Coverage % is calculated correctly', () => {
     const targetRules = ['rule_01', 'rule_02', 'rule_03'];
     const mockCases: TestCase[] = [
-      {
-        title: 'Test Case 1',
+      { tc_id: 'TC_TEST_HP_001', target_feature_id: '<test-fixture-feature>', title: 'Test Case 1',
         category_id: 'api_functional',
         target_rule_id: 'rule_01',
-        steps: [{ step_number: 1, action: 'A', expected: 'B' }]
-      },
+        steps: [{ step_number: 1, action: 'A', expected: 'B' }] },
       {
+        tc_id: 'TC_TEST_HP_002',
+        target_feature_id: '<test-fixture-feature>',
         title: 'Test Case 2',
         category_id: 'api_functional',
         target_rule_id: 'rule_01', // duplicate rule mapping
@@ -64,13 +64,13 @@ suite('Coverage Reporter and Traceability Test Suite', () => {
 
     const mockCases: TestCase[] = [
       // Cat 1 has 4 cases
-      { title: 'T1', category_id: 'cat_01', target_rule_id: 'rule_01', steps: [] },
-      { title: 'T2', category_id: 'cat_01', target_rule_id: 'rule_01', steps: [] },
-      { title: 'T3', category_id: 'cat_01', target_rule_id: 'rule_01', steps: [] },
-      { title: 'T4', category_id: 'cat_01', target_rule_id: 'rule_01', steps: [] },
+      { tc_id: 'TC_TEST_HP_001', target_feature_id: '<test-fixture-feature>', title: 'T1', category_id: 'cat_01', target_rule_id: 'rule_01', steps: [] },
+      { tc_id: 'TC_TEST_HP_001', target_feature_id: '<test-fixture-feature>', title: 'T2', category_id: 'cat_01', target_rule_id: 'rule_01', steps: [] },
+      { tc_id: 'TC_TEST_HP_001', target_feature_id: '<test-fixture-feature>', title: 'T3', category_id: 'cat_01', target_rule_id: 'rule_01', steps: [] },
+      { tc_id: 'TC_TEST_HP_001', target_feature_id: '<test-fixture-feature>', title: 'T4', category_id: 'cat_01', target_rule_id: 'rule_01', steps: [] },
       // Cat 2 has 2 cases
-      { title: 'T5', category_id: 'cat_02', target_rule_id: 'rule_02', steps: [] },
-      { title: 'T6', category_id: 'cat_02', target_rule_id: 'rule_02', steps: [] }
+      { tc_id: 'TC_TEST_HP_001', target_feature_id: '<test-fixture-feature>', title: 'T5', category_id: 'cat_02', target_rule_id: 'rule_02', steps: [] },
+      { tc_id: 'TC_TEST_HP_001', target_feature_id: '<test-fixture-feature>', title: 'T6', category_id: 'cat_02', target_rule_id: 'rule_02', steps: [] }
     ];
 
     const metrics = calculateMetrics(targetRules, mockProposed, mockCases);
@@ -92,7 +92,7 @@ suite('Coverage Reporter and Traceability Test Suite', () => {
 
     const targetRules = ['rule_adjudicate'];
     const mockCases: TestCase[] = [
-      { title: 'Assert claim status approved', category_id: 'cat_01', target_rule_id: 'rule_adjudicate', steps: [] }
+      { tc_id: 'TC_TEST_HP_001', target_feature_id: '<test-fixture-feature>', title: 'Assert claim status approved', category_id: 'cat_01', target_rule_id: 'rule_adjudicate', steps: [] }
     ];
 
     const rows = resolveTraceabilityMatrix(mockGraph, targetRules, mockCases);
@@ -110,7 +110,7 @@ suite('Coverage Reporter and Traceability Test Suite', () => {
   test('Gap Analysis finds untested rules correctly using set-difference', () => {
     const targetRules = ['rule_01', 'rule_02', 'rule_03'];
     const mockCases: TestCase[] = [
-      { title: 'Test Case 1', category_id: 'cat_01', target_rule_id: 'rule_01', steps: [] }
+      { tc_id: 'TC_TEST_HP_001', target_feature_id: '<test-fixture-feature>', title: 'Test Case 1', category_id: 'cat_01', target_rule_id: 'rule_01', steps: [] }
     ];
 
     const mockGraph = {

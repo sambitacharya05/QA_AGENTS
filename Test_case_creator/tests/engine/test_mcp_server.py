@@ -1,7 +1,16 @@
 import os
 import json
 import pytest
-from engine.mcp_server import extract_subgraph, write_azure_csv, write_coverage_report, validate_graph
+from engine.mcp_server import (
+    extract_subgraph,
+    write_azure_csv,
+    write_coverage_report,
+    validate_graph,
+    list_features_with_area_paths,
+    list_rules_with_test_coverage,
+    get_rule_constraints_for_test_validation,
+    get_anomalies_for_features,
+)
 
 def test_extract_subgraph_bfs_traversal(tmp_path):
     # Create a mock graph.json representing rich node-link structure
@@ -240,3 +249,224 @@ def test_validate_graph_no_business_rules(tmp_path):
 
     assert result["is_valid"] is False
     assert any("business_rule" in e for e in result["errors"])
+
+
+# ---------------------------------------------------------------------------
+# SPEC-5 Wave 1 tests
+# ---------------------------------------------------------------------------
+
+def _write_graph(tmp_path, body):
+    path = tmp_path / "graph.json"
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(body, f)
+    return str(path)
+
+
+def test_list_features_with_area_paths_derives_area_path(tmp_path):
+    """SPEC-5 Wave 1 §1.1: feature.area_path = parent_product_name\\feature_name."""
+    body = {
+        "nodes": [
+            {"id": "feature_resume_app", "type": "product_feature",
+             "name": "Resume Application",
+             "metadata": {"parent_product_name": "Click 2 Protect Supreme Plus"}},
+            {"id": "rule_dob", "type": "eligibility_rule", "name": "DOB Age",
+             "metadata": {"parent_feature_id": "feature_resume_app"}},
+            {"id": "scen_01", "type": "test_scenario", "name": "DOB scenario"},
+        ],
+        "edges": [
+            {"source_id": "scen_01", "target_id": "rule_dob", "relationship": "TESTS"},
+        ],
+    }
+    path = _write_graph(tmp_path, body)
+    out = list_features_with_area_paths(path)
+    feats = out["features"]
+    assert len(feats) == 1
+    f = feats[0]
+    assert f["id"] == "feature_resume_app"
+    assert f["area_path"] == "Click 2 Protect Supreme Plus\\Resume Application"
+    assert f["rule_count"] == 1
+    assert f["tests_edge_count"] == 1
+
+
+def test_list_rules_with_test_coverage_includes_counts_and_anomalies(tmp_path):
+    """SPEC-5 Wave 1 §1.1: rule index carries TESTS/IMPLEMENTS/VALIDATES counts
+    plus anomaly_flags from metadata.behavioral_anomalies."""
+    body = {
+        "nodes": [
+            {"id": "rule_a", "type": "business_rule", "name": "Rule A",
+             "description": "Some rule",
+             "metadata": {
+                 "parent_feature_id": "feature_x",
+                 "rule_origin": "functional",
+                 "behavioral_anomalies": [
+                     {"anomaly_kind": "rule_without_implementation", "severity": "warning"},
+                 ],
+             }},
+            {"id": "rule_b", "type": "validation_rule", "name": "Rule B",
+             "description": "", "metadata": {}},
+            {"id": "ep_x", "type": "api_endpoint", "name": "POST /x", "metadata": {}},
+            {"id": "scen_x", "type": "test_scenario", "name": "Scenario X", "metadata": {}},
+        ],
+        "edges": [
+            {"source_id": "scen_x", "target_id": "rule_a", "relationship": "TESTS"},
+            {"source_id": "ep_x", "target_id": "rule_b", "relationship": "IMPLEMENTS"},
+        ],
+    }
+    path = _write_graph(tmp_path, body)
+    out = list_rules_with_test_coverage(path)
+    rules_by_id = {r["id"]: r for r in out["rules"]}
+    assert rules_by_id["rule_a"]["tests_edge_count"] == 1
+    assert rules_by_id["rule_a"]["implements_edge_count"] == 0
+    assert "rule_without_implementation" in rules_by_id["rule_a"]["anomaly_flags"]
+    assert rules_by_id["rule_b"]["implements_edge_count"] == 1
+    assert rules_by_id["rule_b"]["tests_edge_count"] == 0
+
+
+def test_extract_subgraph_extended_context_returns_linked_payloads(tmp_path):
+    """SPEC-5 Wave 1 §1.6: include_extended_context=True surfaces linked
+    rule_constants, field_specs, test_scenarios, ui_elements, and anomalies."""
+    body = {
+        "nodes": [
+            {"id": "rule_dob", "type": "eligibility_rule", "name": "DOB",
+             "metadata": {
+                 "parent_feature_id": "feature_x",
+                 "behavioral_anomalies": [
+                     {"anomaly_kind": "constant_spec_divergence", "severity": "critical"},
+                 ],
+             }},
+            {"id": "rule_constant_dob_min_age", "type": "rule_constant",
+             "name": "dob.min.age", "metadata": {"value": 18}},
+            {"id": "field_spec_dob", "type": "field_specification",
+             "name": "DOB Field", "metadata": {}},
+            {"id": "scen_dob", "type": "test_scenario",
+             "name": "DOB scenario", "metadata": {}},
+            {"id": "ui_element_dob_input", "type": "ui_element",
+             "name": "DOB input", "metadata": {}},
+        ],
+        "edges": [
+            {"source_id": "rule_constant_dob_min_age", "target_id": "rule_dob",
+             "relationship": "MAPS_TO"},
+            {"source_id": "field_spec_dob", "target_id": "rule_dob",
+             "relationship": "MAPS_TO"},
+            {"source_id": "scen_dob", "target_id": "rule_dob",
+             "relationship": "TESTS"},
+            {"source_id": "ui_element_dob_input", "target_id": "rule_dob",
+             "relationship": "VALIDATES"},
+        ],
+    }
+    path = _write_graph(tmp_path, body)
+    out = extract_subgraph(path, ["rule_dob"], include_extended_context=True)
+    assert any(n["id"] == "rule_constant_dob_min_age" for n in out["linked_rule_constants"])
+    assert any(n["id"] == "field_spec_dob" for n in out["linked_field_specs"])
+    assert any(n["id"] == "scen_dob" for n in out["linked_test_scenarios"])
+    assert any(n["id"] == "ui_element_dob_input" for n in out["linked_ui_elements"])
+    assert out["target_feature_id"] == "feature_x"
+    assert len(out["behavioral_anomalies"]) == 1
+    assert out["behavioral_anomalies"][0]["anomaly_kind"] == "constant_spec_divergence"
+
+
+def test_extract_subgraph_default_omits_extended_context(tmp_path):
+    """Back-compat: include_extended_context defaults to False — output is the
+    original shape with no linked_* / behavioral_anomalies / target_feature_id."""
+    body = {
+        "nodes": [{"id": "rule_a", "type": "business_rule", "name": "A"}],
+        "edges": [],
+    }
+    path = _write_graph(tmp_path, body)
+    out = extract_subgraph(path, ["rule_a"])
+    assert set(out.keys()) == {
+        "matched_rule_ids", "subgraph_nodes", "subgraph_edges",
+    }
+
+
+# ---------------------------------------------------------------------------
+# SPEC-5 Wave 2 tests
+# ---------------------------------------------------------------------------
+
+def test_get_rule_constraints_returns_constraints_and_maps_to_peers(tmp_path):
+    """SPEC-5 Wave 2 §2.1: per-rule constraints + MAPS_TO peer rules."""
+    body = {
+        "nodes": [
+            {"id": "rule_dob_format", "type": "validation_rule", "name": "DOB format",
+             "metadata": {
+                 "constraints": {"operator": "matches", "pattern": "DD/MM/YYYY",
+                                 "subject_field": "date_of_birth"},
+                 "verbatim_error_message": "Please enter a valid date of birth",
+             }},
+            {"id": "rule_dob_not_future", "type": "validation_rule", "name": "DOB not future",
+             "metadata": {
+                 "constraints": {"operator": "lt", "value": "<today>",
+                                 "subject_field": "date_of_birth"},
+                 "verbatim_error_message": "DOB cannot be a future date",
+             }},
+            {"id": "rule_unrelated", "type": "eligibility_rule", "name": "Unrelated rule",
+             "metadata": {}},
+        ],
+        "edges": [
+            {"source_id": "rule_dob_format", "target_id": "rule_dob_not_future",
+             "relationship": "MAPS_TO"},
+        ],
+    }
+    path = _write_graph(tmp_path, body)
+    out = get_rule_constraints_for_test_validation(path, ["rule_dob_format"])
+    rules = out["rules"]
+    assert len(rules) == 1
+    entry = rules[0]
+    assert entry["rule_id"] == "rule_dob_format"
+    assert entry["constraints"]["pattern"] == "DD/MM/YYYY"
+    assert entry["verbatim_error_message"] == "Please enter a valid date of birth"
+    peer_ids = {p["rule_id"] for p in entry["maps_to_peers"]}
+    assert peer_ids == {"rule_dob_not_future"}
+
+
+def test_get_anomalies_for_features_aggregates_by_feature_and_severity(tmp_path):
+    """SPEC-5 Wave 2 §2.2: per-feature filter + by_severity counters."""
+    body = {
+        "nodes": [
+            {"id": "rule_a", "type": "business_rule", "name": "Rule A",
+             "metadata": {
+                 "parent_feature_id": "feature_x",
+                 "behavioral_anomalies": [
+                     {"anomaly_kind": "rule_without_implementation", "severity": "warning",
+                      "evidence": {"summary": "no impl edges"}},
+                     {"anomaly_kind": "constant_spec_divergence", "severity": "critical",
+                      "evidence": {"summary": "constant differs"}},
+                 ],
+             }},
+            {"id": "rule_b", "type": "business_rule", "name": "Rule B",
+             "metadata": {
+                 "parent_feature_id": "feature_other",
+                 "behavioral_anomalies": [
+                     {"anomaly_kind": "rule_without_implementation", "severity": "info",
+                      "evidence": {"summary": "in other feature"}},
+                 ],
+             }},
+        ],
+        "edges": [],
+    }
+    path = _write_graph(tmp_path, body)
+    out = get_anomalies_for_features(path, ["feature_x"])
+    assert out["total"] == 2
+    assert out["by_severity"]["warning"] == 1
+    assert out["by_severity"]["critical"] == 1
+    assert out["by_severity"].get("info", 0) == 0
+    assert "feature_x" in out["by_feature"]
+    assert "feature_other" not in out["by_feature"]
+    kinds = out["by_feature"]["feature_x"]
+    assert len(kinds["rule_without_implementation"]) == 1
+    assert len(kinds["constant_spec_divergence"]) == 1
+
+
+def test_get_anomalies_for_features_empty_when_no_anomalies(tmp_path):
+    body = {
+        "nodes": [
+            {"id": "rule_clean", "type": "business_rule", "name": "Clean",
+             "metadata": {"parent_feature_id": "feature_x"}},
+        ],
+        "edges": [],
+    }
+    path = _write_graph(tmp_path, body)
+    out = get_anomalies_for_features(path, ["feature_x"])
+    assert out["total"] == 0
+    assert out["by_severity"]["critical"] == 0
+    assert out["by_feature"] == {"feature_x": {}}

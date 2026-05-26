@@ -105,9 +105,13 @@ def test_behavioral_drift_flow(active_store_and_blueprint):
     assert report["drift_edges"][0]["source_id"] == "ui_page_drift"
     assert report["drift_edges"][0]["target_id"] == "rule_mcp_verification"
     
+    # SPEC-3 Wave 3 (A5): records are flattened (one entry per anomaly) and
+    # the per-record outer keys are anomaly_kind / severity / evidence / ...
     assert len(report["node_anomalies"]) == 1
-    assert report["node_anomalies"][0]["node_id"] == "rule_mcp_verification"
-    assert report["node_anomalies"][0]["details"][0]["observed_deviation_profile"] == "Observed deviation profile description"
+    record = report["node_anomalies"][0]
+    assert record["node_id"] == "rule_mcp_verification"
+    assert record["anomaly_kind"] == "legacy_requirement_drift"
+    assert record["evidence"]["summary"] == "Observed deviation profile description"
     
     # 3. Resolve behavioral drift via update_spec
     resolve_res = main.resolve_behavioral_drift("rule_mcp_verification", "update_spec", target_anomaly_index=0)

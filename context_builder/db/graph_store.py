@@ -323,6 +323,18 @@ class GraphStore:
             metadata["rule_category"] = node_type
             node_type = "business_rule"
 
+        # SPEC-3 Wave 1: rule-family subtypes stay first-class but carry
+        # rule_family for downstream consumers (heuristic mapper, traceability
+        # reports) that want a uniform bucket.
+        rule_family_subtypes = {
+            "validation_rule", "eligibility_rule",
+            "ui_business_rule", "security_rule",
+        }
+        if node_type in rule_family_subtypes:
+            if metadata is None:
+                metadata = {}
+            metadata.setdefault("rule_family", "business_rule")
+
         if metadata is None:
             metadata = {}
 
@@ -658,6 +670,55 @@ class GraphStore:
     def has_node(self, node_id: str) -> bool:
         """Return True if *node_id* exists in the graph."""
         return self.graph.has_node(node_id)
+
+    def record_anomaly(
+        self,
+        node_id: str,
+        anomaly_kind: str,
+        severity: str,
+        evidence: Dict[str, Any],
+        suggested_action: Optional[str] = None,
+        detected_by: str = "relationship-linker",
+    ) -> bool:
+        """Append a structured anomaly record to a node's metadata.behavioral_anomalies.
+
+        SPEC-3 Wave 3: unlike the governance-lock path (which records anomalies
+        as a side-effect of a BLOCKED upsert_node call), this method lets the
+        relationship_linker explicitly record divergences that don't involve a
+        node-update attempt.
+
+        Returns True if the anomaly was appended; False if the node doesn't
+        exist or an anomaly with the same (kind, evidence.summary) pair has
+        already been recorded (idempotency guard against double-recording on
+        re-runs).
+        """
+        from datetime import datetime, timezone
+
+        if not self.graph.has_node(node_id):
+            log.warning("record_anomaly: node %s does not exist", node_id)
+            return False
+
+        node_data = self.graph.nodes[node_id]
+        metadata = node_data.setdefault("metadata", {})
+        anomalies = metadata.setdefault("behavioral_anomalies", [])
+
+        fingerprint = (anomaly_kind, evidence.get("summary", "")[:200])
+        for existing in anomalies:
+            existing_kind = existing.get("anomaly_kind")
+            existing_summary = existing.get("evidence", {}).get("summary", "")[:200]
+            if (existing_kind, existing_summary) == fingerprint:
+                return False
+
+        anomalies.append({
+            "anomaly_kind": anomaly_kind,
+            "severity": severity,
+            "detected_by": detected_by,
+            "detected_at": datetime.now(timezone.utc).isoformat(),
+            "evidence": evidence,
+            "suggested_action": suggested_action,
+        })
+        self._graph_dirty = True
+        return True
 
     def remove_node(self, node_id: str) -> bool:
         """Delete a node and all its incident edges from the graph.

@@ -39,6 +39,8 @@ from mcp_models import (
     ShardMergeResult,
     ShardStatus,
     ActiveShardsResult,
+    # SPEC-3 Wave 3
+    RecordAnomalyResult,
     ok as _ok,
     err as _err,
 )
@@ -480,31 +482,123 @@ def get_framework_generation_blueprint(workspace_path: str = None) -> str:
 
 @mcp.tool()
 def get_behavioral_drift_report(workspace_path: str = None) -> str:
-    """Scan the context graph for detected conflicts and anomalies."""
+    """Scan the context graph for detected conflicts and anomalies.
+
+    SPEC-3 Wave 3 (A5 breaking change): the per-record outer keys changed shape.
+    OLD: {node_id, node_name, anomaly_type, details}.
+    NEW: {node_id, node_name, anomaly_kind, severity, detected_by, detected_at,
+          evidence, suggested_action}.
+    Plus top-level by_kind and by_severity counters. Legacy on-disk records that
+    pre-date Wave 3 still parse because the new code falls back to legacy fields
+    when new ones are absent.
+    """
     try:
         store = _get_store(workspace_path)
-        drift_records = []
+        drift_edges = [
+            e for e in store.get_edges() if e["relationship"] == "DRIFTED_FROM"
+        ]
 
-        edges = store.get_edges()
-        drift_edges = [e for e in edges if e["relationship"] == "DRIFTED_FROM"]
+        flat_records: list[dict] = []
+        by_kind: dict[str, int] = {}
+        by_severity: dict[str, int] = {}
 
         for node_id, data in store.graph.nodes(data=True):
             anomalies = data.get("metadata", {}).get("behavioral_anomalies", [])
-            if anomalies:
-                drift_records.append({
+            for record in anomalies:
+                # New structured records carry anomaly_kind/severity; legacy
+                # records (pre-Wave 3 graphs) don't — shim them in.
+                kind = record.get("anomaly_kind", "legacy_requirement_drift")
+                severity = record.get("severity", "info")
+                flat_records.append({
                     "node_id": node_id,
                     "node_name": data.get("name"),
-                    "anomaly_type": "requirement_mismatch_drift",
-                    "details": anomalies,
+                    "anomaly_kind": kind,
+                    "severity": severity,
+                    "detected_by": record.get("detected_by", "unknown"),
+                    "detected_at": record.get("detected_at"),
+                    "evidence": record.get("evidence", {
+                        "summary": str(
+                            record.get("observed_deviation_profile", "(legacy record)")
+                        )[:200],
+                        "source_file": record.get("reported_by"),
+                    }),
+                    "suggested_action": record.get("suggested_action"),
                 })
+                by_kind[kind] = by_kind.get(kind, 0) + 1
+                by_severity[severity] = by_severity.get(severity, 0) + 1
 
         return json.dumps({
-            "total_anomalies_detected": len(drift_records) + len(drift_edges),
+            "total_anomalies_detected": len(flat_records) + len(drift_edges),
+            "by_kind": by_kind,
+            "by_severity": by_severity,
             "drift_edges": drift_edges,
-            "node_anomalies": drift_records,
+            "node_anomalies": flat_records,
         }, indent=2)
     except Exception as exc:
         return f"Error building drift report: {exc}"
+
+
+# SPEC-3 Wave 3: explicit anomaly recording by the relationship-linker.
+@mcp.tool()
+def record_anomaly(
+    node_id: str,
+    anomaly_kind: str,
+    severity: str,
+    evidence_json: str,
+    suggested_action: str = None,
+    workspace_path: str = None,
+):
+    """Persist a structured behavioral anomaly on a node.
+
+    Called by the relationship-linker agent when it detects one of the four
+    divergence categories. Idempotent — re-recording the same (kind, summary)
+    on the same node is a no-op.
+
+    Args:
+        node_id: Target node ID.
+        anomaly_kind: One of ui_without_requirement, rule_without_implementation,
+                      constant_spec_divergence, endpoint_without_test.
+        severity: One of critical, warning, info.
+        evidence_json: JSON string conforming to AnomalyEvidence schema.
+        suggested_action: Optional remediation hint for human reviewers.
+        workspace_path: Target workspace; defaults to the active one.
+    """
+    try:
+        store = _get_store(workspace_path)
+    except LookupError as exc:
+        return _err("WORKSPACE_NOT_FOUND", str(exc))
+
+    try:
+        evidence = json.loads(evidence_json)
+    except json.JSONDecodeError as exc:
+        return _err("VALIDATION_ERROR", f"evidence_json is not valid JSON: {exc}")
+
+    valid_kinds = {
+        "ui_without_requirement", "rule_without_implementation",
+        "constant_spec_divergence", "endpoint_without_test",
+    }
+    if anomaly_kind not in valid_kinds:
+        return _err("VALIDATION_ERROR", f"Unknown anomaly_kind: {anomaly_kind}")
+    if severity not in {"critical", "warning", "info"}:
+        return _err("VALIDATION_ERROR", f"Unknown severity: {severity}")
+
+    try:
+        with store.transaction():
+            persisted = store.record_anomaly(
+                node_id=node_id,
+                anomaly_kind=anomaly_kind,
+                severity=severity,
+                evidence=evidence,
+                suggested_action=suggested_action,
+            )
+    except Exception as exc:
+        log.exception("record_anomaly failed for %s", node_id)
+        return _err("INTERNAL_ERROR", f"record_anomaly failed: {exc}")
+
+    return _ok(RecordAnomalyResult(
+        node_id=node_id, anomaly_kind=anomaly_kind,
+        severity=severity, persisted=persisted,
+    ))
 
 
 @mcp.tool()

@@ -808,7 +808,10 @@ export function createInitialPipelineState(
     gapLog: null,
     testCases: [],
     sessionId,
-    targetModule: "Claims",
+    // SPEC-5 Wave 1 (gap B7): replaces hardcoded "Claims" default. The real
+    // value is set after module_analyzer completes; "<unresolved>" makes any
+    // unresolved propagation visible in downstream reports.
+    targetModule: "<unresolved>",
   };
 }
 
@@ -1271,7 +1274,9 @@ export async function proceedToExport(
   const reportPayload = {
     metadata: {
       executionDate: now.toISOString(),
-      targetModule: state.targetModule || "Claims",
+      // SPEC-5 Wave 1 (gap B7): no more silent "Claims" mislabel — surface
+      // unresolved state explicitly.
+      targetModule: state.targetModule ?? "<unresolved>",
       totalTargetRules: targetRuleIds.length,
       pairedExportCsv: csvFilename,
     },
@@ -1710,6 +1715,10 @@ function getMockAgentOutput<T>(
     if (state.iterationCount === 0) {
       const defectiveCases: TestCase[] = [
         {
+          // SPEC-5 Wave 1 (A6): mandatory tc_id + target_feature_id on every
+          // TestCase. Mock fixture values are clearly synthetic.
+          tc_id: "TC_TESTFIX_FUNC_001",
+          target_feature_id: "<test-fixture-feature>",
           title: "Assert claim denial inactive coverage",
           category_id: "api_functional",
           target_rule_id: "rule_denial_reason_codes",
@@ -1732,6 +1741,9 @@ function getMockAgentOutput<T>(
     } else {
       const compliantCases: TestCase[] = [
         {
+          // SPEC-5 Wave 1 (A6): mandatory tc_id + target_feature_id.
+          tc_id: "TC_TESTFIX_FUNC_001",
+          target_feature_id: "<test-fixture-feature>",
           title: "Assert claim denial inactive coverage",
           category_id: "api_functional",
           target_rule_id: "rule_denial_reason_codes",
@@ -1797,9 +1809,14 @@ function getMockAgentOutput<T>(
   if (agentFile.includes("module_analyzer")) {
     const analyzer: ModuleAnalyzerOutput = {
       is_module_specific: true,
-      detected_module: "Claims",
+      // SPEC-5 Wave 1 (gap B7): mock module name made obviously synthetic.
+      detected_module: "<test-fixture-module>",
       matched_rule_ids: ["rule_denial_reason_codes"],
       reasoning: "Matches claims keywords semantically.",
+      feature_name: "<test-fixture-feature>",
+      area_path: "<dummy>",
+      is_llm_fallback: false,
+      prioritized_rule_ids: ["rule_denial_reason_codes"],
     };
     return analyzer as any as T;
   }

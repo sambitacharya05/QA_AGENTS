@@ -37,6 +37,28 @@ export interface GraphContext {
   rawSubgraphJson: string;
 }
 
+// SPEC-5 Wave 1: featureIndex / ruleIndex entries surfaced to module_analyzer.
+export interface FeatureIndexEntry {
+  id: string;
+  name: string;
+  area_path: string;
+  rule_count: number;
+  tests_edge_count: number;
+}
+
+export interface RuleIndexEntry {
+  id: string;
+  name: string;
+  description: string;
+  type: string;
+  feature_id: string | null;
+  tests_edge_count: number;
+  implements_edge_count?: number;
+  validates_edge_count?: number;
+  anomaly_flags: string[];
+  rule_origin: string;
+}
+
 // ── Pipeline state (internal orchestrator flow state) ──────────────────────────
 export interface PipelineState {
   proposal: CategoryProposal;
@@ -50,6 +72,13 @@ export interface PipelineState {
   terminationReason?: 'success' | 'divergence' | 'ceiling' | 'user_export';
   finalIterationCount?: number;
   sessionId: string;              // Maps to active stream in activeStreams map
+
+  // SPEC-5 Wave 1: pre-allocated graph context for module_analyzer and
+  // post-analyzer feature / TC sequence state.
+  featureIndex?: FeatureIndexEntry[];
+  ruleIndex?: RuleIndexEntry[];
+  selectedFeature?: { id: string; name: string; area_path: string } | null;
+  tcSequence?: Record<string, Record<string, number>>;
 
   // Compatibility fields
   targetModule?: string;

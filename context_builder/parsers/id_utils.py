@@ -23,6 +23,20 @@ TYPE_PREFIX = {
     "access_control": "rule",
     "enrollment": "rule",
     "non_functional": "rule",
+
+    # SPEC-3 Wave 1 — rule-family subtypes (kept in the rule_ family for ID uniformity)
+    "validation_rule": "rule",
+    "eligibility_rule": "rule",
+    "ui_business_rule": "rule",
+    "security_rule": "rule",
+
+    # SPEC-3 Wave 1 — field specification nodes (own prefix)
+    "field_specification": "field_spec",
+
+    # SPEC-3 Wave 2 — UI / config baseline node types
+    "ui_page_object": "ui_page",
+    "ui_element": "ui_element",
+    "rule_constant": "rule_constant",
 }
 
 

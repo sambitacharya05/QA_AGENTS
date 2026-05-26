@@ -37,11 +37,152 @@ def validate_graph(graph_path: str) -> dict:
     }
 
 
+def _load_graph(graph_path: str) -> tuple[dict, list]:
+    """Load a context_builder graph.json, unwrap the LocalJsonStore envelope,
+    and return (nodes_dict_by_id, edges_list)."""
+    if not os.path.exists(graph_path):
+        raise FileNotFoundError(f"Context graph not found at: {graph_path}")
+    with open(graph_path, "r", encoding="utf-8") as f:
+        graph = json.load(f)
+    if isinstance(graph, dict) and "schema_version" in graph and "payload" in graph:
+        inner = graph.get("payload", {})
+        if isinstance(inner, dict):
+            graph = inner
+    raw_nodes = graph.get("nodes", [])
+    edges = graph.get("edges", []) or graph.get("links", [])
+    nodes_dict: dict = {}
+    if isinstance(raw_nodes, list):
+        for node in raw_nodes:
+            if isinstance(node, dict):
+                node_id = node.get("id") or node.get("rule_id")
+                if node_id:
+                    nodes_dict[node_id] = node
+    elif isinstance(raw_nodes, dict):
+        nodes_dict = raw_nodes
+    return nodes_dict, edges
+
+
+# SPEC-5 Wave 1: rule-family types the analyzer surfaces.
+_RULE_FAMILY = {
+    "business_rule", "validation_rule", "eligibility_rule",
+    "ui_business_rule", "security_rule",
+}
+
+
+@mcp.tool()
+def list_features_with_area_paths(graph_path: str) -> dict:
+    """SPEC-5 Wave 1: return all product_feature nodes with their derived
+    Azure DevOps area paths.
+
+    area_path is derived from metadata.parent_product_name (set by
+    rule_extractor) concatenated with the feature name via backslash.
+    Returns counts of associated rules and TESTS edges.
+    """
+    nodes, edges = _load_graph(graph_path)
+
+    # Count rules per feature_id via metadata.parent_feature_id
+    rules_by_feature: dict[str, int] = {}
+    for node in nodes.values():
+        if node.get("type") in _RULE_FAMILY:
+            parent = node.get("metadata", {}).get("parent_feature_id")
+            if parent:
+                rules_by_feature[parent] = rules_by_feature.get(parent, 0) + 1
+
+    # Count TESTS edges per feature_id (edges pointing into any rule whose
+    # parent_feature_id matches this feature).
+    rule_to_feature: dict[str, str] = {}
+    for nid, node in nodes.items():
+        if node.get("type") in _RULE_FAMILY:
+            parent = node.get("metadata", {}).get("parent_feature_id")
+            if parent:
+                rule_to_feature[nid] = parent
+    tests_by_feature: dict[str, int] = {}
+    for edge in edges:
+        if not isinstance(edge, dict):
+            continue
+        rel = (edge.get("relationship") or edge.get("type") or "").upper()
+        if rel != "TESTS":
+            continue
+        tgt = edge.get("target") or edge.get("target_id")
+        feature = rule_to_feature.get(tgt)
+        if feature:
+            tests_by_feature[feature] = tests_by_feature.get(feature, 0) + 1
+
+    features = []
+    for nid, node in nodes.items():
+        if node.get("type") != "product_feature":
+            continue
+        meta = node.get("metadata", {}) or {}
+        parent_product = meta.get("parent_product_name") or ""
+        name = node.get("name") or nid
+        if parent_product:
+            area_path = f"{parent_product}\\{name}"
+        else:
+            area_path = name
+        features.append({
+            "id": nid,
+            "name": name,
+            "area_path": area_path,
+            "rule_count": rules_by_feature.get(nid, 0),
+            "tests_edge_count": tests_by_feature.get(nid, 0),
+        })
+
+    return {"features": features}
+
+
+@mcp.tool()
+def list_rules_with_test_coverage(graph_path: str) -> dict:
+    """SPEC-5 Wave 1: return all rule-family nodes with their TESTS/IMPLEMENTS/
+    VALIDATES edge counts plus any behavioral_anomaly kinds recorded on the node.
+    """
+    nodes, edges = _load_graph(graph_path)
+
+    in_counts: dict[str, dict[str, int]] = {}
+    for edge in edges:
+        if not isinstance(edge, dict):
+            continue
+        rel = (edge.get("relationship") or edge.get("type") or "").upper()
+        if rel not in {"TESTS", "IMPLEMENTS", "VALIDATES"}:
+            continue
+        tgt = edge.get("target") or edge.get("target_id")
+        if not tgt:
+            continue
+        in_counts.setdefault(tgt, {"TESTS": 0, "IMPLEMENTS": 0, "VALIDATES": 0})
+        in_counts[tgt][rel] = in_counts[tgt].get(rel, 0) + 1
+
+    rules = []
+    for nid, node in nodes.items():
+        if node.get("type") not in _RULE_FAMILY:
+            continue
+        meta = node.get("metadata", {}) or {}
+        counts = in_counts.get(nid, {"TESTS": 0, "IMPLEMENTS": 0, "VALIDATES": 0})
+        anomalies = meta.get("behavioral_anomalies", []) or []
+        anomaly_flags = sorted({
+            a.get("anomaly_kind") for a in anomalies
+            if isinstance(a, dict) and a.get("anomaly_kind")
+        })
+        rules.append({
+            "id": nid,
+            "name": node.get("name") or nid,
+            "description": node.get("description") or "",
+            "type": node.get("type"),
+            "feature_id": meta.get("parent_feature_id"),
+            "tests_edge_count": counts.get("TESTS", 0),
+            "implements_edge_count": counts.get("IMPLEMENTS", 0),
+            "validates_edge_count": counts.get("VALIDATES", 0),
+            "anomaly_flags": list(anomaly_flags),
+            "rule_origin": meta.get("rule_origin", "functional"),
+        })
+
+    return {"rules": rules}
+
+
 @mcp.tool()
 def extract_subgraph(
     graph_path: str,
     rule_ids: list[str],
     bidirectional: bool = True,
+    include_extended_context: bool = False,
 ) -> dict:
     """
     Extracts the minimal connected subgraph reachable from the given rule_ids.
@@ -58,36 +199,7 @@ def extract_subgraph(
 
     Returns only the nodes and edges relevant to the requested rules.
     """
-    # 1. Structural file exists pre-flight
-    if not os.path.exists(graph_path):
-        raise FileNotFoundError(f"Context graph not found at: {graph_path}")
-
-    with open(graph_path, 'r', encoding='utf-8') as f:
-        graph = json.load(f)
-
-    # Unwrap the LocalJsonStore envelope if present.
-    # Context Builder writes: { schema_version, generator, written_at, payload: {nodes, edges} }
-    if isinstance(graph, dict) and "schema_version" in graph and "payload" in graph:
-        inner = graph.get("payload", {})
-        if isinstance(inner, dict):
-            graph = inner
-
-    # Safeguard: Default empty objects if nodes/edges keys are missing
-    raw_nodes = graph.get('nodes', [])
-    # NetworkX node_link_data(graph, edges="edges") writes the key as "edges";
-    # fall back to "links" for graphs serialised by older NetworkX versions.
-    edges = graph.get('edges', []) or graph.get('links', [])
-
-    # Normalize nodes to a dictionary for fast lookup
-    nodes_dict = {}
-    if isinstance(raw_nodes, list):
-        for node in raw_nodes:
-            if isinstance(node, dict):
-                node_id = node.get('id') or node.get('rule_id')
-                if node_id:
-                    nodes_dict[node_id] = node
-    elif isinstance(raw_nodes, dict):
-        nodes_dict = raw_nodes
+    nodes_dict, edges = _load_graph(graph_path)
 
     visited_ids = set()
     queue = list(rule_ids)
@@ -144,11 +256,191 @@ def extract_subgraph(
         if source_id in visited_ids and target_id in visited_ids:
             subgraph_edges.append(edge)
 
-    return {
+    base = {
         'matched_rule_ids': rule_ids,
         'subgraph_nodes':   result_nodes,
         'subgraph_edges':   subgraph_edges,
     }
+
+    if not include_extended_context:
+        return base
+
+    # SPEC-5 Wave 1: extended context for the rewritten test_case_analyst
+    # (Phase -1). Walks rule-family seed nodes outward and collects:
+    #   - linked_rule_constants   (MAPS_TO from rule_constant → seed)
+    #   - linked_field_specs      (MAPS_TO from field_specification → seed)
+    #   - linked_test_scenarios   (TESTS from test_scenario → seed)
+    #   - linked_ui_elements      (VALIDATES/MAPS_TO/REFERENCES from ui_element → seed)
+    #   - behavioral_anomalies    (anomaly records on seed nodes)
+    #   - target_feature_id       (dominant product_feature_id across seeds)
+    seed_ids = set(rule_ids)
+    linked_rule_constants: list[dict] = []
+    linked_field_specs: list[dict] = []
+    linked_test_scenarios: list[dict] = []
+    linked_ui_elements: list[dict] = []
+    seen_added: set[str] = set()
+
+    def _add_node(target_list: list, node: dict) -> None:
+        nid = node.get("id") or node.get("rule_id")
+        key = (id(target_list), nid)
+        if key in seen_added:
+            return
+        seen_added.add(key)
+        target_list.append(node)
+
+    for edge in edges:
+        if not isinstance(edge, dict):
+            continue
+        rel = (edge.get("relationship") or edge.get("type") or "").upper()
+        src = edge.get("source") or edge.get("source_id")
+        tgt = edge.get("target") or edge.get("target_id")
+        if tgt not in seed_ids and src not in seed_ids:
+            continue
+        # The interesting direction is <other_node> → seed.
+        other_id = src if tgt in seed_ids else tgt
+        other = nodes_dict.get(other_id)
+        if not other:
+            continue
+        other_type = other.get("type")
+        if rel == "MAPS_TO" and other_type == "rule_constant":
+            _add_node(linked_rule_constants, other)
+        elif rel == "MAPS_TO" and other_type == "field_specification":
+            _add_node(linked_field_specs, other)
+        elif rel == "TESTS" and other_type == "test_scenario":
+            _add_node(linked_test_scenarios, other)
+        elif rel in {"VALIDATES", "MAPS_TO", "REFERENCES"} and other_type == "ui_element":
+            _add_node(linked_ui_elements, other)
+
+    behavioral_anomalies: list[dict] = []
+    for rid in rule_ids:
+        node = nodes_dict.get(rid)
+        if not node:
+            continue
+        for record in node.get("metadata", {}).get("behavioral_anomalies", []) or []:
+            behavioral_anomalies.append({"node_id": rid, **record})
+
+    # Dominant parent_feature_id across the seeds (mode).
+    feature_counts: dict[str, int] = {}
+    for rid in rule_ids:
+        node = nodes_dict.get(rid)
+        if not node:
+            continue
+        pf = node.get("metadata", {}).get("parent_feature_id")
+        if pf:
+            feature_counts[pf] = feature_counts.get(pf, 0) + 1
+    target_feature_id = (
+        max(feature_counts, key=feature_counts.get) if feature_counts else None
+    )
+
+    base.update({
+        "linked_rule_constants": linked_rule_constants,
+        "linked_field_specs": linked_field_specs,
+        "linked_test_scenarios": linked_test_scenarios,
+        "linked_ui_elements": linked_ui_elements,
+        "behavioral_anomalies": behavioral_anomalies,
+        "target_feature_id": target_feature_id,
+    })
+    return base
+
+
+# SPEC-5 Wave 2: structured constraints for verifier Point 8 (input ambiguity).
+@mcp.tool()
+def get_rule_constraints_for_test_validation(
+    graph_path: str,
+    rule_ids: list[str],
+) -> dict:
+    """Return structured constraints for each rule + its MAPS_TO peers.
+
+    The test_verifier uses this to check whether a single test input violates
+    multiple rule predicates simultaneously (H7: 2030-01-01 violates both
+    format and future-date rules).
+    """
+    nodes, edges = _load_graph(graph_path)
+
+    # Index MAPS_TO peers: rule_id → list of peer rule_ids reachable via MAPS_TO
+    # edges (in either direction) whose other endpoint is also a rule.
+    peers_by_rule: dict[str, set[str]] = {rid: set() for rid in rule_ids}
+    for edge in edges:
+        if not isinstance(edge, dict):
+            continue
+        if (edge.get("relationship") or edge.get("type") or "").upper() != "MAPS_TO":
+            continue
+        src = edge.get("source") or edge.get("source_id")
+        tgt = edge.get("target") or edge.get("target_id")
+        for endpoint, other in ((src, tgt), (tgt, src)):
+            if endpoint in peers_by_rule:
+                other_node = nodes.get(other)
+                if other_node and other_node.get("type") in _RULE_FAMILY:
+                    if other != endpoint:
+                        peers_by_rule[endpoint].add(other)
+
+    def _rule_entry(rule_id: str) -> dict:
+        node = nodes.get(rule_id, {})
+        meta = node.get("metadata", {}) or {}
+        return {
+            "rule_id": rule_id,
+            "constraints": meta.get("constraints", {}) or {},
+            "verbatim_error_message": meta.get("verbatim_error_message"),
+        }
+
+    result = []
+    for rid in rule_ids:
+        entry = _rule_entry(rid)
+        entry["maps_to_peers"] = [
+            _rule_entry(peer) for peer in sorted(peers_by_rule.get(rid, set()))
+        ]
+        result.append(entry)
+
+    return {"rules": result}
+
+
+# SPEC-5 Wave 2: per-feature anomaly aggregation for the coverage_reporter.
+@mcp.tool()
+def get_anomalies_for_features(
+    graph_path: str,
+    feature_ids: list[str],
+) -> dict:
+    """Return behavioral_anomalies for rules belonging to the given features.
+
+    Aggregates anomaly records carried on rule-family nodes whose
+    metadata.parent_feature_id matches one of the supplied feature_ids.
+    Wraps the same shape get_behavioral_drift_report exposes, filtered.
+    """
+    nodes, _ = _load_graph(graph_path)
+    target = set(feature_ids)
+
+    by_feature: dict[str, dict[str, list]] = {fid: {} for fid in target}
+    by_severity: dict[str, int] = {"critical": 0, "warning": 0, "info": 0}
+    total = 0
+
+    for nid, node in nodes.items():
+        meta = node.get("metadata", {}) or {}
+        pf = meta.get("parent_feature_id")
+        if pf not in target:
+            continue
+        for record in meta.get("behavioral_anomalies", []) or []:
+            if not isinstance(record, dict):
+                continue
+            kind = record.get("anomaly_kind", "legacy_requirement_drift")
+            severity = record.get("severity", "info")
+            entry = {
+                "node_id": nid,
+                "node_name": node.get("name"),
+                "anomaly_kind": kind,
+                "severity": severity,
+                "detected_by": record.get("detected_by", "unknown"),
+                "detected_at": record.get("detected_at"),
+                "evidence": record.get("evidence", {}),
+                "suggested_action": record.get("suggested_action"),
+            }
+            by_feature.setdefault(pf, {}).setdefault(kind, []).append(entry)
+            if severity in by_severity:
+                by_severity[severity] += 1
+            else:
+                by_severity[severity] = by_severity.get(severity, 0) + 1
+            total += 1
+
+    return {"by_feature": by_feature, "by_severity": by_severity, "total": total}
 
 
 @mcp.tool()

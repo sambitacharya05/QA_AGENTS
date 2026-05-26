@@ -71,6 +71,10 @@ _DEFAULT_POLICY: dict = {
             "min_score": 0.65,
             "applicable_types": [
                 ["test_scenario", "business_rule"],
+                ["test_scenario", "validation_rule"],     # SPEC-3 Wave 1
+                ["test_scenario", "eligibility_rule"],    # SPEC-3 Wave 1
+                ["test_scenario", "ui_business_rule"],    # SPEC-3 Wave 1
+                ["test_scenario", "security_rule"],       # SPEC-3 Wave 1
                 ["test_scenario", "api_endpoint"],
             ],
         },
@@ -78,6 +82,10 @@ _DEFAULT_POLICY: dict = {
             "min_score": 0.70,
             "applicable_types": [
                 ["code_component", "business_rule"],
+                ["code_component", "validation_rule"],    # SPEC-3 Wave 1
+                ["code_component", "eligibility_rule"],   # SPEC-3 Wave 1
+                ["code_component", "ui_business_rule"],   # SPEC-3 Wave 1
+                ["code_component", "test_scenario"],      # SPEC-3 Wave 3 (step def → scenario)
                 ["api_endpoint", "business_rule"],
                 ["api_endpoint", "product_feature"],
                 ["api_endpoint", "code_component"],
@@ -87,7 +95,11 @@ _DEFAULT_POLICY: dict = {
             "min_score": 0.70,
             "applicable_types": [
                 ["business_rule", "data_model"],
+                ["validation_rule", "data_model"],        # SPEC-3 Wave 1
                 ["ui_page_object", "business_rule"],
+                ["ui_page_object", "ui_business_rule"],   # SPEC-3 Wave 1 (preps Wave 2)
+                ["data_model", "validation_rule"],        # SPEC-3 Wave 2
+                ["data_model", "eligibility_rule"],       # SPEC-3 Wave 2
                 ["data_model", "business_rule"],   # SPEC-006 (Wave 5): config nodes → rules
             ],
         },
@@ -95,6 +107,49 @@ _DEFAULT_POLICY: dict = {
             "min_score": 0.95,
             "applicable_types": [
                 ["api_endpoint", "data_model"],
+            ],
+        },
+        # SPEC-3 Wave 1 — new MAPS_TO relationship for field_specification linkage.
+        # SPEC-3 Wave 2 — extended with rule_constant and ui_element pairs.
+        "MAPS_TO": {
+            "min_score": 0.60,
+            "applicable_types": [
+                ["field_specification", "business_rule"],
+                ["field_specification", "validation_rule"],
+                ["field_specification", "eligibility_rule"],
+                ["field_specification", "ui_business_rule"],
+                ["field_specification", "security_rule"],
+                ["rule_constant", "business_rule"],        # SPEC-3 Wave 2
+                ["rule_constant", "validation_rule"],      # SPEC-3 Wave 2
+                ["rule_constant", "eligibility_rule"],     # SPEC-3 Wave 2
+                ["rule_constant", "security_rule"],        # SPEC-3 Wave 2
+                ["ui_element", "field_specification"],     # SPEC-3 Wave 2
+                ["ui_element", "ui_business_rule"],        # SPEC-3 Wave 2
+            ],
+        },
+        # SPEC-3 Wave 2 — new REFERENCES relationship.
+        "REFERENCES": {
+            "min_score": 0.70,
+            "applicable_types": [
+                ["ui_page_object", "ui_element"],
+                ["test_scenario", "ui_element"],
+                ["code_component", "test_utility"],
+            ],
+        },
+        # SPEC-3 Wave 3 — new CALLS relationship.
+        "CALLS": {
+            "min_score": 0.75,
+            "applicable_types": [
+                ["code_component", "test_utility"],
+                ["test_utility", "test_utility"],
+            ],
+        },
+        # SPEC-3 Wave 3 — new USES_DATA relationship (scenario → data_model via
+        # external_data_source path match).
+        "USES_DATA": {
+            "min_score": 0.60,
+            "applicable_types": [
+                ["test_scenario", "data_model"],
             ],
         },
     },
@@ -124,10 +179,26 @@ def _load_policy(storage_dir: str) -> dict:
         # Back-fill any missing top-level keys from defaults (forward-compat)
         for key, val in _DEFAULT_POLICY.items():
             policy.setdefault(key, val)
+        # SPEC-3 Wave 1: back-fill any newly-added relationship rules without
+        # overwriting user edits. A user who tightened TESTS' min_score keeps
+        # their value; new relationships (MAPS_TO etc.) land on next load.
+        default_rels = _DEFAULT_POLICY.get("relationship_rules", {})
+        user_rels = policy.setdefault("relationship_rules", {})
+        for rel_name, rel_def in default_rels.items():
+            if rel_name not in user_rels:
+                user_rels[rel_name] = rel_def
         return policy
     except (OSError, json.JSONDecodeError) as exc:
         log.warning("Could not read edge_policy.json (%s) — using defaults", exc)
         return _DEFAULT_POLICY
+
+
+# SPEC-3 Wave 1: rule-family bucket — broadens scoring to all rule subtypes.
+_RULE_FAMILY_TYPES = {
+    "business_rule",
+    "validation_rule", "eligibility_rule",
+    "ui_business_rule", "security_rule",
+}
 
 
 def _applicable_types(policy: dict, relationship: str) -> list[list[str]]:
@@ -202,7 +273,10 @@ class HeuristicEdgeMapper:
         idf_model = CorpusTfIdf(corpus_docs, extra_stopwords=extra_stopwords)
 
         # --- Bucket nodes by type ---
-        business_rules = [n for n in nodes_list if n["type"] == "business_rule"]
+        # SPEC-3 Wave 1: business_rules now includes rule-family subtypes so
+        # validation_rule / eligibility_rule / ui_business_rule / security_rule
+        # nodes participate in scoring.
+        business_rules = [n for n in nodes_list if n["type"] in _RULE_FAMILY_TYPES]
         features = [n for n in nodes_list if n["type"] == "product_feature"]
         endpoints = [n for n in nodes_list if n["type"] == "api_endpoint"]
         code_components = [n for n in nodes_list if n["type"] == "code_component"]
@@ -448,7 +522,8 @@ class HeuristicEdgeMapper:
         idf_model = CorpusTfIdf(corpus_docs, extra_stopwords=extra_stopwords)
 
         # Bucket nodes by type (same as map())
-        business_rules = [n for n in nodes_list if n["type"] == "business_rule"]
+        # SPEC-3 Wave 1: includes rule-family subtypes.
+        business_rules = [n for n in nodes_list if n["type"] in _RULE_FAMILY_TYPES]
         features = [n for n in nodes_list if n["type"] == "product_feature"]
         endpoints = [n for n in nodes_list if n["type"] == "api_endpoint"]
         code_components = [n for n in nodes_list if n["type"] == "code_component"]

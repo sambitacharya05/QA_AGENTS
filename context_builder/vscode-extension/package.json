@@ -56,6 +56,10 @@
           {
             "name": "view",
             "description": "Launches an interactive network diagram of the Context Graph inside a VS Code Webview."
+          },
+          {
+            "name": "anomalies",
+            "description": "Review behavioral anomalies recorded by the relationship-linker. Optional severity filter: critical | warning | info."
           }
         ]
       }

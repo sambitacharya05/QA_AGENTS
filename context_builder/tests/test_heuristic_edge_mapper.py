@@ -404,3 +404,39 @@ class TestEdgeMapperNoOp:
         mapper.map(store)
         after = _edge_set(store.get_edges())
         assert before == after, "HeuristicEdgeMapper.map() must not write to the store"
+
+
+# ---------------------------------------------------------------------------
+# SPEC-3 Wave 1: rule-family subtypes participate in TESTS scoring
+# ---------------------------------------------------------------------------
+
+class TestRuleFamilySubtypeBucket:
+
+    @pytest.mark.parametrize(
+        "subtype",
+        ["validation_rule", "eligibility_rule",
+         "ui_business_rule", "security_rule"],
+    )
+    def test_rule_family_subtypes_participate_in_scoring(self, tmp_path, subtype):
+        """SPEC-3 Wave 1 §1.2: rule-family subtypes are now bucketed alongside
+        business_rule so test_scenario nodes can target them with TESTS edges
+        via the policy's applicable_types list."""
+        store = _seed_store(tmp_path, [
+            {"id": "sc1", "type": "test_scenario",
+             "name": "youthful driver surcharge",
+             "description": ""},
+            {"id": f"rule_yds_{subtype}", "type": subtype,
+             "name": "youthful driver surcharge calculation",
+             "description": ""},
+            # Padding so the corpus has enough docs for non-trivial IDF.
+            {"id": "br_pad", "type": "business_rule",
+             "name": "endorsement eligibility window", "description": ""},
+            {"id": "sc_pad", "type": "test_scenario",
+             "name": "renewal reinstatement", "description": ""},
+        ])
+        mapper = HeuristicEdgeMapper()
+        edges = mapper.map(store)
+        assert ("sc1", f"rule_yds_{subtype}", "TESTS") in _edge_set(edges), (
+            f"Expected TESTS edge from sc1 → rule_yds_{subtype}, "
+            f"got edges: {_edge_set(edges)}"
+        )

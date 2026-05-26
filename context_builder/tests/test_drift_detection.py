@@ -227,10 +227,21 @@ def test_mcp_tools_drift_report_and_resolve(temp_store, monkeypatch):
     report_json = main.get_behavioral_drift_report()
     report = json.loads(report_json)
 
-    assert report["total_anomalies_detected"] == 1
-    assert report["node_anomalies"][0]["node_id"] == "rule_mcp_test"
-    assert len(report["node_anomalies"][0]["details"]) == 2
-    assert report["node_anomalies"][0]["details"][0]["observed_deviation_profile"] == "Observed deviation rate 1.5"
+    # SPEC-3 Wave 3 (A5): records are flattened — one report entry per anomaly,
+    # not one per node. So 2 agent attempts produce 2 node_anomalies entries.
+    assert report["total_anomalies_detected"] == 2
+    assert "by_kind" in report
+    assert "by_severity" in report
+    rule_records = [
+        r for r in report["node_anomalies"] if r["node_id"] == "rule_mcp_test"
+    ]
+    assert len(rule_records) == 2
+    # Legacy anomalies (recorded via governance-guardrail path) get the
+    # fallback anomaly_kind via the shim in main.py.
+    assert all(r["anomaly_kind"] == "legacy_requirement_drift" for r in rule_records)
+    summaries = {r["evidence"]["summary"] for r in rule_records}
+    assert "Observed deviation rate 1.5" in summaries
+    assert "Observed deviation rate 2.0" in summaries
 
     # 4. Resolve using resolve_behavioral_drift with specific index (Index 0: rate 1.5)
     resolve_res = main.resolve_behavioral_drift("rule_mcp_test", "update_spec", target_anomaly_index=0)

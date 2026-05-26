@@ -179,7 +179,7 @@ suite('Self-Correction and Verification Loop Integration Test Suite', () => {
     };
 
     const mockCases: TestCase[] = [
-      { title: "Test 1", category_id: "api_functional", target_rule_id: "rule_01", steps: [] }
+      { tc_id: 'TC_TEST_HP_001', target_feature_id: '<test-fixture-feature>', title: "Test 1", category_id: "api_functional", target_rule_id: "rule_01", steps: [] }
     ];
 
     const mockVerifierResult: GapLog = {
@@ -212,7 +212,7 @@ suite('Self-Correction and Verification Loop Integration Test Suite', () => {
     };
 
     const mockCases: TestCase[] = [
-      { title: "Test 1", category_id: "api_functional", target_rule_id: "rule_01", steps: [] }
+      { tc_id: 'TC_TEST_HP_001', target_feature_id: '<test-fixture-feature>', title: "Test 1", category_id: "api_functional", target_rule_id: "rule_01", steps: [] }
     ];
 
     const mockVerifierResult: GapLog = {
@@ -257,7 +257,7 @@ suite('Self-Correction and Verification Loop Integration Test Suite', () => {
     };
 
     const mockCases: TestCase[] = [
-      { title: "Test 1", category_id: "api_functional", target_rule_id: "rule_01", steps: [] }
+      { tc_id: 'TC_TEST_HP_001', target_feature_id: '<test-fixture-feature>', title: "Test 1", category_id: "api_functional", target_rule_id: "rule_01", steps: [] }
     ];
 
     const mockVerifierResult: GapLog = {
@@ -303,7 +303,7 @@ suite('Self-Correction and Verification Loop Integration Test Suite', () => {
     };
 
     const mockCases: TestCase[] = [
-      { title: "Test 1", category_id: "api_functional", target_rule_id: "rule_01", steps: [] }
+      { tc_id: 'TC_TEST_HP_001', target_feature_id: '<test-fixture-feature>', title: "Test 1", category_id: "api_functional", target_rule_id: "rule_01", steps: [] }
     ];
 
     const mockVerifierResult: GapLog = {

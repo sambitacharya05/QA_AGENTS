@@ -236,6 +236,57 @@ class ActiveShardsResult(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# SPEC-3 Wave 3: anomaly recording schemas
+# ---------------------------------------------------------------------------
+
+
+class AnomalyEvidence(BaseModel):
+    """Structured evidence block on every behavioral_anomaly record."""
+
+    summary: str = Field(..., description="One-sentence explanation of the divergence")
+    source_file: Optional[str] = Field(None, description="Workspace-relative path of the source file")
+    related_node_ids: List[str] = Field(default_factory=list)
+    related_edge_keys: List[str] = Field(default_factory=list)
+
+
+class BehavioralAnomalyRecord(BaseModel):
+    """Single anomaly entry persisted in a node's metadata.behavioral_anomalies."""
+
+    node_id: str
+    anomaly_kind: Literal[
+        "ui_without_requirement",
+        "rule_without_implementation",
+        "constant_spec_divergence",
+        "endpoint_without_test",
+    ]
+    severity: Literal["critical", "warning", "info"]
+    detected_by: str = Field("relationship-linker", description="Agent that recorded the anomaly")
+    detected_at: str = Field(..., description="ISO-8601 UTC timestamp")
+    evidence: AnomalyEvidence
+    suggested_action: Optional[str] = None
+
+
+class LinkerSummary(BaseModel):
+    """Summary returned by the relationship-linker after a run."""
+
+    workspace_path: str
+    edges_emitted: int
+    edges_skipped_off_policy: int
+    anomalies_recorded: int
+    anomalies_by_kind: Dict[str, int]
+    duration_seconds: float
+
+
+class RecordAnomalyResult(BaseModel):
+    """Return shape from the record_anomaly MCP tool."""
+
+    node_id: str
+    anomaly_kind: str
+    severity: str
+    persisted: bool
+
+
+# ---------------------------------------------------------------------------
 # Convenience factory helpers (used in main.py)
 # ---------------------------------------------------------------------------
 

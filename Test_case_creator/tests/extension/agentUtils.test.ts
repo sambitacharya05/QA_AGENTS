@@ -98,6 +98,8 @@ suite('agentUtils and Schema Validation Test Suite', () => {
   test('TestCasesArraySchema accepts valid test case where Step 1 is assertion-free and Step 2 contains assertions', () => {
     const validCases: TestCase[] = [
       {
+        tc_id: "TC_PRIORAUTH_HP_001",
+        target_feature_id: "<test-fixture-feature>",
         title: "Submit prior auth request",
         category_id: "prior_auth",
         target_rule_id: "rule_pa_01",
@@ -115,6 +117,8 @@ suite('agentUtils and Schema Validation Test Suite', () => {
   test('TestCasesArraySchema rejects test case where Step 1 action contains assertions', () => {
     const invalidCases: TestCase[] = [
       {
+        tc_id: "TC_PRIORAUTH_FUNC_001",
+        target_feature_id: "<test-fixture-feature>",
         title: "Submit prior auth request with bad step 1 action",
         category_id: "prior_auth",
         target_rule_id: "rule_pa_01",
@@ -134,6 +138,8 @@ suite('agentUtils and Schema Validation Test Suite', () => {
   test('TestCasesArraySchema rejects test case where Step 1 expected outcome contains assertions', () => {
     const invalidCases: TestCase[] = [
       {
+        tc_id: "TC_PRIORAUTH_NEG_001",
+        target_feature_id: "<test-fixture-feature>",
         title: "Submit prior auth request with bad step 1 expected",
         category_id: "prior_auth",
         target_rule_id: "rule_pa_01",

@@ -9,6 +9,7 @@ from parsers.code_parser import CodeParser
 from parsers.feature_parser import FeatureParser
 from parsers.schema_parser import SchemaParser
 from parsers.markdown_parser import MarkdownParser
+from parsers.properties_parser import PropertiesParser
 from parsers.test_framework_parsers import PlaywrightBddParser, QafAutomationParser
 
 # Map extensions to their parser classes
@@ -24,7 +25,10 @@ PARSER_MAP: Dict[str, Type[BaseParser]] = {
     ".md": MarkdownParser,
     ".bdd": QafAutomationParser,
     ".loc": QafAutomationParser,
-    ".properties": QafAutomationParser,
+    # SPEC-3 Wave 2: per-key rule_constant emission via PropertiesParser.
+    # get_parser_for_file factory below still overrides this for locator-
+    # style .properties files (routes to QafAutomationParser instead).
+    ".properties": PropertiesParser,
     ".java": CodeParser,
     ".ts": CodeParser,
     ".tsx": CodeParser,
@@ -66,7 +70,9 @@ def get_parser_for_file(file_path: str, shared_context: Dict[str, Any] = None) -
                                     shared_context["step_provider_packages"] = pkgs
                 except Exception:
                     pass
-            return SchemaParser()
+            # SPEC-3 Wave 2: route to PropertiesParser (per-key rule_constants),
+            # not SchemaParser (which emitted zero entities for .properties).
+            return PropertiesParser()
 
         try:
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
@@ -79,13 +85,14 @@ def get_parser_for_file(file_path: str, shared_context: Dict[str, Any] = None) -
             strategy in content for strategy in ["id=", "name=", "xpath=", "css=", "link=", "class="]
         )
         is_locator_path = any(
-            pat in normalized_path.lower() 
+            pat in normalized_path.lower()
             for pat in ["/locators/", "/objectrepo/", "/pages/", "/qaf/", "/ui/"]
         )
 
         if has_locator_strategy or is_locator_path:
             return QafAutomationParser(shared_context)
-        return SchemaParser()
+        # SPEC-3 Wave 2: fallback for unknown .properties files.
+        return PropertiesParser()
 
     # 3. Java File Heuristics (QAF Steps / Page Objects / RestAssured / Lombok DTOs vs Spring Code)
     if ext == ".java":

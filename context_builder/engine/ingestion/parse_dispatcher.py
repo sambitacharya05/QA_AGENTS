@@ -37,7 +37,14 @@ class ParseDispatcher:
     at lines 81-128 of ``engine/extractor.py`` (Spec 003 — Wave 2).
     """
 
-    DOC_ORIGIN_EXTS: frozenset = frozenset({".docx", ".xlsx", ".pdf", ".md"})
+    # SPEC-3 Wave 2: extend governance lock to .properties (authoritative
+    # rule_constants like dob.min.age=18) and .loc (locator definitions that
+    # are authoritative DOM bindings).
+    DOC_ORIGIN_EXTS: frozenset = frozenset({
+        ".docx", ".xlsx", ".pdf", ".md",
+        ".properties",
+        ".loc",
+    })
 
     def __init__(
         self,

@@ -5,11 +5,24 @@ import { TestCase, ProposedCategory, CategoryProposal } from './schemas';
 import { PipelineState } from './types';
 
 export interface CoverageMetrics {
+  // SPEC-5 Wave 2: honest-denominator math (C1/C3 fix).
+  // ruleCoverageNumerator / Denominator are the new authoritative fields;
+  // ruleCoveragePercent is computed from them. Older callers that only set
+  // ruleCoveragePercent still work via the optional num/denom.
+  ruleCoverageNumerator?: number;
+  ruleCoverageDenominator?: number;
   ruleCoveragePercent: number;
   conditionCoveragePercent: number;
   totalTestCases: number;
   totalTestSteps: number;
   avgStepsPerCase: number;
+}
+
+// SPEC-5 Wave 2: per-feature anomaly aggregation surfaced in the report.
+export interface BehavioralAnomaliesSection {
+  by_feature: Record<string, Record<string, any[]>>;
+  by_severity: Record<string, number>;
+  total: number;
 }
 
 export interface TraceabilityRow {

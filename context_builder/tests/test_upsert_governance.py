@@ -168,6 +168,82 @@ class TestUpsertNodeMerge:
         assert node["metadata"]["implementation_status"] == "verified_in_code"
 
 
+class TestDocLockOnExtendedExtensions:
+    """SPEC-3 Wave 2 (A3): .properties / .loc now in DOC_ORIGIN_EXTS so nodes
+    those parsers emit are governance-locked. Agent overwrite attempts must
+    be blocked and recorded as behavioral_anomalies (not silently merged)."""
+
+    def _seed_doc_locked(self, store, node_id, node_type, source_path):
+        """Seed a node as if a doc-origin parser had just stamped it."""
+        store.upsert_node(
+            node_id, node_type, f"Initial {node_id}",
+            "Parser-emitted authoritative value.",
+            {
+                "source_file": source_path,
+                "sync_governance": {
+                    "is_merged": False,
+                    "origin": "documentation",
+                    "source_origins": [source_path],
+                },
+            },
+        )
+
+    def test_agent_overwrite_blocked_on_properties_rule_constant(self, store):
+        self._seed_doc_locked(
+            store, "rule_constant_dob_min_age", "rule_constant",
+            "ingest/config/application.properties",
+        )
+
+        # Agent tries to overwrite with a different description.
+        store.upsert_node(
+            "rule_constant_dob_min_age", "rule_constant",
+            "Initial rule_constant_dob_min_age",
+            "Agent-rewritten description (should be REJECTED).",
+            {
+                "source_file": "agent:rule-extractor",
+                "sync_governance": {
+                    "caller": "agent",
+                    "agent_name": "rule-extractor",
+                    "timestamp": "2026-05-26T00:00:00Z",
+                },
+            },
+        )
+
+        node = store.get_node("rule_constant_dob_min_age")
+        assert node["description"] == "Parser-emitted authoritative value.", (
+            "Doc-locked rule_constant must NOT be overwritten by agent."
+        )
+        anomalies = node["metadata"].get("behavioral_anomalies", [])
+        assert len(anomalies) >= 1, (
+            "Blocked overwrite must be recorded as a behavioral_anomaly."
+        )
+
+    def test_agent_overwrite_blocked_on_loc_ui_element(self, store):
+        self._seed_doc_locked(
+            store, "ui_element_btn_send_otp", "ui_element",
+            "ingest/pages/login.loc",
+        )
+
+        store.upsert_node(
+            "ui_element_btn_send_otp", "ui_element",
+            "Initial ui_element_btn_send_otp",
+            "Agent-rewritten ui_element description (should be REJECTED).",
+            {
+                "source_file": "agent:test-infra-mapper",
+                "sync_governance": {
+                    "caller": "agent",
+                    "agent_name": "test-infra-mapper",
+                    "timestamp": "2026-05-26T00:00:00Z",
+                },
+            },
+        )
+
+        node = store.get_node("ui_element_btn_send_otp")
+        assert node["description"] == "Parser-emitted authoritative value."
+        anomalies = node["metadata"].get("behavioral_anomalies", [])
+        assert len(anomalies) >= 1
+
+
 class TestIdUtils:
     """Tests for the SUEI ID generation utility."""
 
